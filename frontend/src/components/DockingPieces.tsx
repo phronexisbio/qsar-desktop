@@ -258,7 +258,20 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
   );
 }
 
-export function DockDetailPanel({ r, receptorPdbPath }: { r: DockResultRow; receptorPdbPath?: string | null }) {
+export function DockDetailPanel({
+  r,
+  receptorPdbPath,
+  jobId,
+  reportKind = "docking",
+}: {
+  r: DockResultRow;
+  receptorPdbPath?: string | null;
+  /** Enables the A5 "Generate research report" button when the caller
+      has a completed job id to report against — omitted (e.g. from
+      TargetInfoTab's ad-hoc panels, which have no job) hides it. */
+  jobId?: string | null;
+  reportKind?: "docking" | "screen";
+}) {
   const canView = !!r.interaction_png;
   const g = r.gnina;
   const ec = r.enrichment_context;
@@ -360,6 +373,107 @@ export function DockDetailPanel({ r, receptorPdbPath }: { r: DockResultRow; rece
           </div>
         </DetailSection>
       )}
+
+      {jobId && r.vina_score != null && (
+        <DetailSection title="Research report">
+          <ResearchReportButton jobId={jobId} smiles={r.smiles} kind={reportKind} />
+        </DetailSection>
+      )}
+    </div>
+  );
+}
+
+/** A5 — assembles and shows the full evidence-chain report for one
+    compound (natural source, chemical identity, literature, target
+    prediction, QSAR, docking, interactions, ADMET, off-target,
+    summary) on demand, since it's a slower call (a live PubMed request
+    is part of it) that most users won't want for every row. */
+export function ResearchReportButton({ jobId, smiles, kind }: { jobId: string; smiles: string; kind: "docking" | "screen" }) {
+  const [state, setState] = useState<"idle" | "loading" | "error" | "done">("idle");
+  const [error, setError] = useState("");
+  const [data, setData] = useState<{ report: any; markdown: string } | null>(null);
+
+  const generate = async () => {
+    setState("loading");
+    setError("");
+    try {
+      const r = await api.researchReport(kind, jobId, smiles, true);
+      setData(r);
+      setState("done");
+    } catch (e: any) {
+      setError(e.message || "Error");
+      setState("error");
+    }
+  };
+
+  const downloadMarkdown = () => {
+    if (!data) return;
+    const blob = new Blob([data.markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `research_report_${(smiles || "compound").slice(0, 24).replace(/[^A-Za-z0-9]+/g, "_")}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (state === "idle" || state === "error") {
+    return (
+      <div>
+        <button type="button" className="btn-link" onClick={generate}>
+          Generate research report
+        </button>
+        {state === "error" && <div className="field-hint text-clay">{error}</div>}
+      </div>
+    );
+  }
+  if (state === "loading") {
+    return <div className="text-[12.5px] text-inkmut">Assembling evidence chain (includes a live PubMed lookup)…</div>;
+  }
+  const r = data!.report;
+  return (
+    <div>
+      <div className="mb-2.5 flex items-center justify-between">
+        <div className="text-[11px] text-inkmut">{r.pipeline_stages.join(" → ")}</div>
+        <button type="button" className="btn-link shrink-0" onClick={downloadMarkdown}>
+          Download report (.md)
+        </button>
+      </div>
+      <div className="rounded-lg border border-line bg-surface1 p-3 text-[12.5px] leading-relaxed text-ink">{r.evidence_summary}</div>
+      <ReportField label="Natural source" value={r.natural_source?.plant_source} />
+      <ReportField
+        label="Chemical identity"
+        value={r.chemical_identity?.available && `${r.chemical_identity.molecular_formula}, MW ${r.chemical_identity.molecular_weight}, LogP ${r.chemical_identity.logp}`}
+      />
+      <ReportField
+        label="Reported activity"
+        value={
+          r.reported_activity?.available
+            ? `${r.reported_activity.n_results} paper(s) for "${r.reported_activity.query}"`
+            : r.reported_activity?.note
+        }
+      />
+      <ReportField
+        label="Target prediction"
+        value={r.target_prediction?.available && (r.target_prediction.on_target_supported ? "Supported by similar known actives" : "No similar known actives found")}
+      />
+      <ReportField
+        label="Off-target analysis"
+        value={r.off_target_analysis?.available && `${r.off_target_analysis.n_off_targets ?? 0} other target(s) with similarity signal`}
+      />
+      <details className="mt-2">
+        <summary className="cursor-pointer text-[11.5px] font-semibold text-brand-700">Methods (draft)</summary>
+        <p className="mt-1 text-[12px] leading-relaxed text-inkmut">{r.methods_draft}</p>
+      </details>
+    </div>
+  );
+}
+
+function ReportField({ label, value }: { label: string; value?: string | null | false }) {
+  if (!value) return null;
+  return (
+    <div className="mt-1.5 text-[12px] text-inkmut">
+      <b className="text-ink">{label}:</b> {value}
     </div>
   );
 }

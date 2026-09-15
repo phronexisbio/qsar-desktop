@@ -1255,3 +1255,50 @@ def literature_search(body: LiteratureSearchBody):
         raise HTTPException(400, str(e))
     except LIT.LiteratureError as e:
         raise HTTPException(502, str(e))
+
+
+# ============================================================
+#  A5 — Research story generator (research_report.py)
+# ============================================================
+class ResearchReportBody(BaseModel):
+    smiles: str
+    include_literature: bool = True
+
+
+@app.post("/api/docking/job/{jid}/research_report")
+def docking_research_report(jid: str, body: ResearchReportBody):
+    """Assembles the A5 evidence-chain report for ONE compound from an
+       already-completed Docking-tab job — reuses A1/A2/A4's data, never
+       re-runs docking. See research_report.py's module docstring."""
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    dock_row = next((r for r in (job.get("results") or []) if r.get("smiles") == body.smiles), None)
+    if dock_row is None:
+        raise HTTPException(404, "no docking result for this SMILES in this job")
+    rm = job.get("run_metadata") or {}
+    import research_report as RR
+    report = RR.build_report(rm.get("target_id"), body.smiles, dock_row, run_metadata=rm,
+                              plant_source=rm.get("plant_source"), include_literature=body.include_literature)
+    return {"report": report, "markdown": RR.to_markdown(report)}
+
+
+@app.post("/api/screen/job/{jid}/research_report")
+def screen_research_report(jid: str, body: ResearchReportBody):
+    """Same as docking_research_report, adapted for the Screen pipeline's
+       shortlist shape (each row's docking result nests under
+       row['docking'])."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    result = job["result"]
+    row = next((r for r in (result.get("shortlist") or []) if r.get("smiles") == body.smiles), None)
+    if row is None:
+        raise HTTPException(404, "no result for this SMILES in this job")
+    dock_row = dict(row.get("docking") or {})
+    dock_row["smiles"] = body.smiles
+    rm = job.get("run_metadata") or {}
+    import research_report as RR
+    report = RR.build_report(rm.get("target_id") or result.get("target_id"), body.smiles, dock_row, run_metadata=rm,
+                              plant_source=rm.get("plant_source"), include_literature=body.include_literature)
+    return {"report": report, "markdown": RR.to_markdown(report)}

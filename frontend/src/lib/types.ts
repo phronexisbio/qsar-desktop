@@ -448,3 +448,30 @@ export interface LiteratureResult {
   n_results: number;
   papers: LiteraturePaper[];
 }
+
+/** A5's evidence-chain report — deeply variable per-section shape
+    (each section is independently "available: boolean" depending on
+    what data existed for this compound), so typed permissively like
+    the rest of this file's larger nested payloads. */
+export interface ResearchReport {
+  generated_at: string;
+  target_id: string;
+  pipeline_stages: string[];
+  natural_source: { plant_source?: string | null };
+  chemical_identity: Record<string, any>;
+  reported_activity: { available: boolean; query?: string; n_results?: number; papers?: LiteraturePaper[]; note?: string };
+  target_prediction: Record<string, any>;
+  qsar_prediction: Record<string, any>;
+  docking: DockResultRow | Record<string, any>;
+  interaction_analysis: { interactions: any[]; residue_overlap_pct?: number | null };
+  admet: { available: boolean; profile?: AdmetProfile; note?: string };
+  off_target_analysis: Record<string, any>;
+  evidence_summary: string;
+  methods_draft: string;
+  reproducibility: Record<string, any>;
+  disclaimer: string;
+}
+export interface ResearchReportResponse {
+  report: ResearchReport;
+  markdown: string;
+}

@@ -325,7 +325,7 @@ function DockResultsTable({
                     <tr>
                       <td className="border-b border-surface2" />
                       <td colSpan={20} className="border-b border-surface2 p-0">
-                        <DockDetailPanel r={r} receptorPdbPath={receptorPdbPath} />
+                        <DockDetailPanel r={r} receptorPdbPath={receptorPdbPath} jobId={jobId} reportKind="docking" />
                       </td>
                     </tr>
                   )}

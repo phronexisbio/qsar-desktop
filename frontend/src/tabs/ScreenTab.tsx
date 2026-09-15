@@ -11,7 +11,7 @@ import { WhyThisButton } from "../components/RecommendationPanel";
 import { SectionIntro, ResultHeader, ResultName, Stat } from "../components/Shell";
 import { ConfidenceDot, Disclaimer, EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { LeafLattice } from "../components/Icons";
-import { DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
+import { DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner, ResearchReportButton } from "../components/DockingPieces";
 import { ResidueFrequencyTable } from "../components/ResidueFrequencyTable";
 import { tierClass } from "../lib/tierClass";
 import type { AdvancedDockingBody, DockResultRow, ScreenResult } from "../lib/types";
@@ -289,13 +289,15 @@ function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string;
                 {d.shortlist.map((r, i) => {
                   const canView = !!(r.docking && r.docking.interaction_png);
                   const canFreshDecoy = !!(r.docking && r.docking.status === "ok");
+                  const canReport = !!(r.docking && r.docking.vina_score != null);
+                  const hasDetail = canView || canReport;
                   const open = openRows.has(i);
                   return (
                     <Fragment key={i}>
-                      <tr className={canView ? "cursor-pointer hover:bg-canvas" : ""} onClick={() => canView && toggle(i)}>
+                      <tr className={hasDetail ? "cursor-pointer hover:bg-canvas" : ""} onClick={() => hasDetail && toggle(i)}>
                         <td className="border-b border-surface2 px-2.5 py-2.5 text-brand-600">
                           {r.rank}
-                          {canView ? (open ? " ▾" : " ▸") : ""}
+                          {hasDetail ? (open ? " ▾" : " ▸") : ""}
                         </td>
                         <td className="smi-mono border-b border-surface2 px-2.5 py-2.5">{r.smiles}</td>
                         <td className="border-b border-surface2 px-2.5 py-2.5">
@@ -330,15 +332,23 @@ function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string;
                           {canFreshDecoy ? <FreshDecoyButton smiles={r.smiles} targetId={d.target_id} advanced={advanced} /> : <span className="text-inkmut">—</span>}
                         </td>
                       </tr>
-                      {canView && open && (
+                      {hasDetail && open && (
                         <tr>
                           <td className="border-b border-surface2" />
                           <td colSpan={20} className="border-b border-surface2 bg-surface2/40 p-0">
                             <div className="px-5 py-3.5">
-                              <img src={`data:image/png;base64,${r.docking!.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+                              {canView && (
+                                <img src={`data:image/png;base64,${r.docking!.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+                              )}
                               {r.docking!.pose_pdb && (
                                 <div className="mt-2">
                                   <DownloadComplexButton smiles={r.smiles} posePdb={r.docking!.pose_pdb} receptorPdbPath={d.receptor_pdb_path} />
+                                </div>
+                              )}
+                              {canReport && (
+                                <div className="mt-3">
+                                  <h5 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wide text-brand-700">Research report</h5>
+                                  <ResearchReportButton jobId={jobId} smiles={r.smiles} kind="screen" />
                                 </div>
                               )}
                             </div>
@@ -442,7 +452,7 @@ function GeneOnlyDockResults({
                     <tr>
                       <td className="border-b border-surface2" />
                       <td colSpan={20} className="border-b border-surface2 p-0">
-                        <DockDetailPanel r={r} receptorPdbPath={receptorPdbPath} />
+                        <DockDetailPanel r={r} receptorPdbPath={receptorPdbPath} jobId={jobId} reportKind="docking" />
                       </td>
                     </tr>
                   )}

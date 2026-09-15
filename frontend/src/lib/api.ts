@@ -17,6 +17,7 @@ import type {
   SimilarityResult,
   TargetFishingResult,
   LiteratureResult,
+  ResearchReportResponse,
   ReceptorProfile,
   RecommendationResponse,
   ScreenJobStatus,
@@ -228,5 +229,9 @@ export const targetFishingSearch = (smiles: string, threshold = 0.4) =>
 // ---------- A4: literature intelligence (live PubMed search) ----------
 export const literatureSearch = (query: string, max_results = 10) =>
   api<LiteratureResult>("/api/literature/search", json({ query, max_results }));
+
+// ---------- A5: research story generator ----------
+export const researchReport = (kind: "docking" | "screen", jobId: string, smiles: string, includeLiterature = true) =>
+  api<ResearchReportResponse>(`/api/${kind}/job/${jobId}/research_report`, json({ smiles, include_literature: includeLiterature }));
 
 export { ApiError };

@@ -57,6 +57,16 @@ export function DockingIcon(p: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function TargetFishingIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="4" />
+      <path d="M4 4l4.5 4.5" />
+      <circle cx="4" cy="4" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 export function TargetInfoIcon(p: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...p}>

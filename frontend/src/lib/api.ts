@@ -15,6 +15,7 @@ import type {
   EnrichmentStats,
   PredictResponse,
   SimilarityResult,
+  TargetFishingResult,
   ReceptorProfile,
   RecommendationResponse,
   ScreenJobStatus,
@@ -217,5 +218,10 @@ export const similarityDownloadProgress = (jid: string) =>
 export const similarityDownloadCancel = (jid: string) => api<{ ok: boolean }>(`/api/similarity/download/cancel/${jid}`, { method: "POST" });
 export const similaritySearch = (smiles: string, threshold = 0.4, top_n = 50) =>
   api<SimilarityResult>("/api/similarity/search", json({ smiles, threshold, top_n }));
+
+// ---------- A2: compound -> target prediction ----------
+export const targetFishingStatus = () => api<{ available: boolean }>("/api/target_fishing/status");
+export const targetFishingSearch = (smiles: string, threshold = 0.4) =>
+  api<TargetFishingResult>("/api/target_fishing/search", json({ smiles, threshold }));
 
 export { ApiError };

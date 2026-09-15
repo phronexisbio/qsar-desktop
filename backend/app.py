@@ -1196,3 +1196,38 @@ def similarity_search(body: SimilaritySearchBody):
         raise HTTPException(503, "Similarity index not downloaded yet — see the Similarity Search tab.")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ============================================================
+#  A2 — Compound -> target prediction (target_fishing.py)
+# ============================================================
+import target_fishing as TF
+
+
+class TargetFishingBody(BaseModel):
+    smiles: str
+    threshold: float = Field(default=0.4, ge=0.0, le=1.0)
+
+
+@app.get("/api/target_fishing/status")
+def target_fishing_status():
+    """Whether the precomputed curated-compound fingerprint index is
+       present — it's committed straight into the repo (see
+       target_fishing.py's module docstring), so this is normally always
+       true; kept as an explicit check anyway so the frontend can show a
+       clear error instead of a raw 503 if a build ever ships without it."""
+    return {"available": TF.available()}
+
+
+@app.post("/api/target_fishing/search")
+def target_fishing_search(body: TargetFishingBody):
+    """Ligand-based 'which targets might this compound hit' search:
+       Tanimoto similarity to known bioactive compounds curated per-target
+       (models/curated/*.csv) — the same 'guilt by association' principle
+       SwissTargetPrediction uses, not a calibrated probability."""
+    try:
+        return TF.search(body.smiles, threshold=body.threshold)
+    except FileNotFoundError:
+        raise HTTPException(503, "Target-fishing index not available in this build.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))

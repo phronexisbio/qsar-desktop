@@ -414,3 +414,22 @@ export interface SimilarityResult {
   n_results: number;
   results: SimilarityHit[];
 }
+
+export interface TargetFishingCompound {
+  smiles: string;
+  tanimoto: number;
+  pchembl_value?: number | null;
+}
+export interface TargetFishingHit {
+  target_chembl: string;
+  target_id: string;
+  n_similar_actives: number;
+  best_similarity: number;
+  compounds: TargetFishingCompound[];
+}
+export interface TargetFishingResult {
+  n_curated_compounds: number;
+  n_targets_searched: number;
+  n_targets_matched: number;
+  results: TargetFishingHit[];
+}

@@ -8,11 +8,13 @@ import { CompareTab } from "./tabs/CompareTab";
 import { DockingTab } from "./tabs/DockingTab";
 import { TargetInfoTab } from "./tabs/TargetInfoTab";
 import { SimilarityTab } from "./tabs/SimilarityTab";
+import { TargetFishingTab } from "./tabs/TargetFishingTab";
 import { DownloadsTab } from "./tabs/DownloadsTab";
 
 function initialTab(): TabId {
   const h = window.location.hash.replace("#", "");
-  if (["screen", "predict", "admet", "compare", "docking", "target", "similarity", "downloads"].includes(h)) return h as TabId;
+  if (["screen", "predict", "admet", "compare", "docking", "target", "similarity", "target_fishing", "downloads"].includes(h))
+    return h as TabId;
   return "screen";
 }
 
@@ -50,6 +52,9 @@ export default function App() {
         </div>
         <div className={tab === "similarity" ? "" : "hidden"}>
           <SimilarityTab />
+        </div>
+        <div className={tab === "target_fishing" ? "" : "hidden"}>
+          <TargetFishingTab />
         </div>
         <div className={tab === "downloads" ? "" : "hidden"}>
           <DownloadsTab />

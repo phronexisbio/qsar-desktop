@@ -16,6 +16,7 @@ import type {
   PredictResponse,
   SimilarityResult,
   TargetFishingResult,
+  LiteratureResult,
   ReceptorProfile,
   RecommendationResponse,
   ScreenJobStatus,
@@ -223,5 +224,9 @@ export const similaritySearch = (smiles: string, threshold = 0.4, top_n = 50) =>
 export const targetFishingStatus = () => api<{ available: boolean }>("/api/target_fishing/status");
 export const targetFishingSearch = (smiles: string, threshold = 0.4) =>
   api<TargetFishingResult>("/api/target_fishing/search", json({ smiles, threshold }));
+
+// ---------- A4: literature intelligence (live PubMed search) ----------
+export const literatureSearch = (query: string, max_results = 10) =>
+  api<LiteratureResult>("/api/literature/search", json({ query, max_results }));
 
 export { ApiError };

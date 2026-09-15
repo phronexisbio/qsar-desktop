@@ -1,7 +1,17 @@
 import { useAppData } from "../lib/AppDataContext";
-import { AdmetIcon, CompareIcon, DockingIcon, DownloadIcon, LeafLattice, PredictIcon, ScreenIcon, SimilarityIcon, TargetFishingIcon, TargetInfoIcon } from "./Icons";
+import { AdmetIcon, CompareIcon, DockingIcon, DownloadIcon, LeafLattice, LiteratureIcon, PredictIcon, ScreenIcon, SimilarityIcon, TargetFishingIcon, TargetInfoIcon } from "./Icons";
 
-export type TabId = "screen" | "predict" | "admet" | "compare" | "docking" | "target" | "similarity" | "target_fishing" | "downloads";
+export type TabId =
+  | "screen"
+  | "predict"
+  | "admet"
+  | "compare"
+  | "docking"
+  | "target"
+  | "similarity"
+  | "target_fishing"
+  | "literature"
+  | "downloads";
 
 const TABS: { id: TabId; label: string; icon: (p: any) => JSX.Element }[] = [
   { id: "screen", label: "Screen", icon: ScreenIcon },
@@ -11,6 +21,7 @@ const TABS: { id: TabId; label: string; icon: (p: any) => JSX.Element }[] = [
   { id: "docking", label: "Docking", icon: DockingIcon },
   { id: "similarity", label: "Similarity", icon: SimilarityIcon },
   { id: "target_fishing", label: "Target Fishing", icon: TargetFishingIcon },
+  { id: "literature", label: "Literature", icon: LiteratureIcon },
   { id: "target", label: "Target Info", icon: TargetInfoIcon },
   { id: "downloads", label: "Downloads", icon: DownloadIcon },
 ];

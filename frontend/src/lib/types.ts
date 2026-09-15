@@ -433,3 +433,18 @@ export interface TargetFishingResult {
   n_targets_matched: number;
   results: TargetFishingHit[];
 }
+
+export interface LiteraturePaper {
+  pmid: string | null;
+  title: string;
+  abstract?: string | null;
+  journal?: string | null;
+  year?: string | null;
+  authors?: string;
+  url?: string | null;
+}
+export interface LiteratureResult {
+  query: string;
+  n_results: number;
+  papers: LiteraturePaper[];
+}

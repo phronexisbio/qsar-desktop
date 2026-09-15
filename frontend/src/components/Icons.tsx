@@ -67,6 +67,14 @@ export function TargetFishingIcon(p: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function LiteratureIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H12v16H6.5A2.5 2.5 0 0 0 4 21.5z" />
+      <path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H12v16h5.5a2.5 2.5 0 0 1 2.5 2.5z" />
+    </svg>
+  );
+}
 export function TargetInfoIcon(p: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...p}>

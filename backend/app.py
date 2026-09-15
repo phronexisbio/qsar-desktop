@@ -1231,3 +1231,27 @@ def target_fishing_search(body: TargetFishingBody):
         raise HTTPException(503, "Target-fishing index not available in this build.")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ============================================================
+#  A4 — Literature intelligence (literature.py)
+# ============================================================
+import literature as LIT
+
+
+class LiteratureSearchBody(BaseModel):
+    query: str
+    max_results: int = Field(default=10, ge=1, le=30)
+
+
+@app.post("/api/literature/search")
+def literature_search(body: LiteratureSearchBody):
+    """Live PubMed search (NCBI E-utilities) for a target/compound/plant-
+       source name — this app's first request-time external network call,
+       so failures are surfaced as 502 (network/API) rather than crashing."""
+    try:
+        return LIT.search(body.query, max_results=body.max_results)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except LIT.LiteratureError as e:
+        raise HTTPException(502, str(e))

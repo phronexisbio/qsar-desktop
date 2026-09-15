@@ -451,6 +451,23 @@ def _structure_candidates_for_gene(gene, default_pdb=None):
                    "Vina's pose geometry for a manually-picked structure is unconfirmed until proven."}
 
 
+@app.get("/api/targets/{target_id}/enrichment_stats")
+def enrichment_stats(target_id: str):
+    """Full statistical validation dashboard for this target's saved
+       active/decoy reference (see docking/enrichment_stats.py) — the
+       richer, on-demand view beyond the free per-compound percentile rank
+       annotate_with_reference() already attaches to every dock. Returns
+       404 if this target has no saved reference at all (never been
+       through scripts/validate_target.py's enrichment step)."""
+    if DOCK_AVAIL is None:
+        raise HTTPException(503, "Docking package not available")
+    from docking.enrichment_stats import compute_stats
+    stats = compute_stats(target_id)
+    if stats is None:
+        raise HTTPException(404, f"no saved enrichment reference for '{target_id}'")
+    return stats
+
+
 @app.get("/api/targets/{target_id}/structure_candidates")
 def structure_candidates(target_id: str):
     """Every qualifying structure for this target's gene from the Version 2

@@ -11,6 +11,8 @@ import type {
   DownloadJobStatus,
   DownloadStartResponse,
   DownloadsStatus,
+  EnrichmentRunSettings,
+  EnrichmentStats,
   PredictResponse,
   ReceptorProfile,
   RecommendationResponse,
@@ -113,6 +115,7 @@ export const structureCandidates = (targetId: string) =>
       ? `/api/genes/${encodeURIComponent(targetId.slice(5))}/structure_candidates`
       : `/api/targets/${targetId}/structure_candidates`
   );
+export const enrichmentStats = (targetId: string) => api<EnrichmentStats>(`/api/targets/${targetId}/enrichment_stats`);
 export const boxFromResidues = (body: {
   target_id: string;
   residues: { chain: string; resnum: number }[];
@@ -160,6 +163,8 @@ export const freshDecoyJob = (jid: string) =>
       compound_score: number;
       n_decoys_docked: number;
       n_decoys_failed?: number;
+      decoy_stats?: { mean: number; median: number; sd: number; min: number; max: number } | null;
+      run_settings?: EnrichmentRunSettings;
     };
   }>(`/api/docking/enrichment/fresh/job/${jid}`);
 

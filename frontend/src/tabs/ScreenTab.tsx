@@ -11,7 +11,7 @@ import { WhyThisButton } from "../components/RecommendationPanel";
 import { SectionIntro, ResultHeader, ResultName, Stat } from "../components/Shell";
 import { ConfidenceDot, Disclaimer, EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { LeafLattice } from "../components/Icons";
-import { DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
+import { DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
 import { tierClass } from "../lib/tierClass";
 import type { AdvancedDockingBody, DockResultRow, ScreenResult } from "../lib/types";
 
@@ -394,7 +394,7 @@ function GeneOnlyDockResults({
           </thead>
           <tbody>
             {results.map((r, i) => {
-              const hasDetail = !!r.interaction_png || r.status === "ok";
+              const hasDetail = !!r.interaction_png || r.status === "ok" || !!r.suggested_action;
               const open = openRows.has(i);
               return (
                 <Fragment key={i}>
@@ -417,18 +417,7 @@ function GeneOnlyDockResults({
                     <tr>
                       <td className="border-b border-surface2" />
                       <td colSpan={20} className="border-b border-surface2 p-0">
-                        <div className="bg-surface2/40 px-5 py-3.5">
-                          {r.interaction_png ? (
-                            <img src={`data:image/png;base64,${r.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
-                          ) : (
-                            <div className="text-[13px] text-inkmut">No interaction diagram for this pose.</div>
-                          )}
-                          {r.pose_pdb && (
-                            <div className="mt-2">
-                              <DownloadComplexButton smiles={r.smiles} posePdb={r.pose_pdb} receptorPdbPath={receptorPdbPath} />
-                            </div>
-                          )}
-                        </div>
+                        <DockDetailPanel r={r} receptorPdbPath={receptorPdbPath} />
                       </td>
                     </tr>
                   )}

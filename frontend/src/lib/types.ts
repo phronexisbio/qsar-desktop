@@ -146,6 +146,39 @@ export interface ReceptorProfile {
   [k: string]: any;
 }
 
+export interface DistStats {
+  n: number;
+  mean: number;
+  median: number;
+  sd: number;
+  min: number;
+  max: number;
+}
+export interface EnrichmentRunSettings {
+  pdb_source?: string | null;
+  decoy_method?: string | null;
+  engine?: string | null;
+  exhaustiveness?: number | null;
+  center?: [number, number, number] | null;
+  box_size?: [number, number, number] | null;
+  docking_mode?: "site_specific" | "blind" | null;
+}
+export interface EnrichmentStats {
+  counts: { actives: number; decoys: number; failed: number };
+  active_stats?: DistStats | null;
+  decoy_stats?: DistStats | null;
+  z_score?: number | null;
+  z_score_note?: string;
+  roc_auc?: number;
+  pr_auc?: number;
+  enrichment_factor?: Record<string, number | null>;
+  bedroc?: number | null;
+  bedroc_note?: string;
+  run_settings?: EnrichmentRunSettings;
+  plots?: { score_distribution: string; roc_curve: string; pr_curve: string; enrichment_curve: string };
+  error?: string;
+}
+
 export interface PocketResidue {
   chain: string;
   resnum: number;
@@ -188,6 +221,14 @@ export interface DockResultRow {
   smiles: string;
   status: string;
   reason?: string;
+  error?: string;
+  /** Finer failure classification than `status` (e.g. "invalid_molecule",
+      "conformer_generation_failed", "pose_validity_failed") plus a plain-
+      language suggested_action — absent for a successful ("ok") result,
+      since there's nothing to diagnose. See backend/docking/
+      failure_diagnostics.py for the exact category list. */
+  category?: string;
+  suggested_action?: string;
   confidence?: "high" | "medium" | "low" | "none";
   vina_score?: number | null;
   n_valid?: number;

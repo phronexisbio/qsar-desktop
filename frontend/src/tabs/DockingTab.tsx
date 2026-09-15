@@ -271,7 +271,7 @@ function DockResultsTable({
           <tbody>
             {results.map((r, i) => {
               const canView = !!r.interaction_png;
-              const hasDetail = canView || r.status === "ok";
+              const hasDetail = canView || r.status === "ok" || !!r.suggested_action;
               const open = openRows.has(i);
               return (
                 <Fragment key={i}>

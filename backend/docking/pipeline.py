@@ -17,6 +17,7 @@ from .validity import ValidityGate
 from .consensus import select_pose, assign_confidence
 from .engines import VinaEngine, GninaRescorer
 from .rmsd import safe_rmsd
+from .failure_diagnostics import classify_failure
 
 
 def pose_pdb_with_hydrogens(pose_mol):
@@ -40,7 +41,11 @@ def dock_compound(profile, smiles, engine=None, rescorer=None, n_poses=9,
                   rmsd_threshold=2.0, make_diagram=False, reference_interactions=None):
     lig = prepare_ligand(smiles)
     if not lig.ok:
-        return {"smiles": smiles, "status": "ligand_prep_failed", "error": lig.error}
+        result = {"smiles": smiles, "status": "ligand_prep_failed", "error": lig.error}
+        diag = classify_failure(result)
+        if diag:
+            result.update(diag)
+        return result
     engine = engine or VinaEngine()
     errors = {}
     try:
@@ -91,6 +96,9 @@ def dock_compound(profile, smiles, engine=None, rescorer=None, n_poses=9,
 
     result["confidence"] = assign_confidence(sel, gnina)
     result["status"] = "ok" if sel.get("consensus_pose") else "no_pose"
+    diag = classify_failure(result)
+    if diag:
+        result.update(diag)
     return result
 
 

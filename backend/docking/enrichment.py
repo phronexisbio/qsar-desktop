@@ -170,10 +170,26 @@ def fresh_decoy_validation(target_id, smiles, profile, engine=None, n_decoys=50,
 
     valid_scores = [d["score"] for d in decoy_rows if d["score"] is not None]
     pct = percentile_rank(compound_score, valid_scores) if valid_scores else None
+    import numpy as np
+    decoy_stats = None
+    if valid_scores:
+        arr = np.array(valid_scores, dtype=float)
+        decoy_stats = {"mean": round(float(arr.mean()), 3), "median": round(float(np.median(arr)), 3),
+                       "sd": round(float(arr.std(ddof=1)), 3) if len(arr) > 1 else 0.0,
+                       "min": round(float(arr.min()), 3), "max": round(float(arr.max()), 3)}
     return {
         "compound_score": compound_score,
         "n_decoys_generated": len(decoys), "n_decoys_docked": len(valid_scores),
         "n_decoys_failed": len(decoy_rows) - len(valid_scores),
         "percentile": pct, "discrimination": discrimination_label(pct),
+        "decoy_stats": decoy_stats,
         "decoys": decoy_rows,
+        # B7's "show the run settings used for THIS validation" — same
+        # transparency B6 applies to a live docking submission, applied
+        # here too so the percentile above can actually be interpreted.
+        "run_settings": {
+            "center": profile.get("center"), "box_size": profile.get("box_size"),
+            "docking_mode": "blind" if profile.get("site_source") == "blind_whole_protein" else "site_specific",
+            "pdb_source": profile.get("pdb_source"), "exhaustiveness": engine.exhaustiveness,
+        },
     }

@@ -6,6 +6,19 @@ import type { AdvancedDockingBody, DockResultRow } from "../lib/types";
 import { PoseViewer } from "./PoseViewer";
 import { Notice } from "./Feedback";
 
+// Matches backend/docking/failure_diagnostics.py's category slugs exactly.
+const FAILURE_CATEGORY_LABELS: Record<string, string> = {
+  invalid_molecule: "Invalid molecule",
+  conformer_generation_failed: "3D conformer generation failed",
+  ligand_conversion_failed: "Ligand-to-PDBQT conversion failed",
+  ligand_prep_failed: "Ligand preparation failed",
+  engine_unavailable: "Docking engine unavailable",
+  engine_error: "Docking engine error",
+  pose_validity_failed: "No physically valid pose",
+  no_pose: "No pose produced",
+  other: "Failed",
+};
+
 /** Summarises the redocking-validation status of the receptor a batch of
     compounds was actually docked against — shown once above the results
     table/shortlist rather than per-row (validation is a property of the
@@ -179,9 +192,14 @@ export function FreshDecoyButton({ smiles, targetId, advanced }: { smiles: strin
         setStatus({ kind: "muted", text: res.error });
         return;
       }
+      const ds = res.decoy_stats;
+      const rs = res.run_settings;
       setStatus({
         kind: "ok",
-        text: `Fresh percentile: ${res.percentile}% · Decoy discrimination: ${res.discrimination} — compound score ${res.compound_score} kcal/mol vs ${res.n_decoys_docked} freshly-docked, property-matched & topologically-dissimilar decoys${res.n_decoys_failed ? ` (${res.n_decoys_failed} failed to dock)` : ""}.`,
+        text:
+          `Fresh percentile: ${res.percentile}% · Decoy discrimination: ${res.discrimination} — compound score ${res.compound_score} kcal/mol vs ${res.n_decoys_docked} freshly-docked, property-matched & topologically-dissimilar decoys${res.n_decoys_failed ? ` (${res.n_decoys_failed} failed to dock)` : ""}.` +
+          (ds ? ` Decoy scores: mean ${ds.mean}, median ${ds.median}, SD ${ds.sd} (range ${ds.min} to ${ds.max}).` : "") +
+          (rs ? ` Run: ${rs.docking_mode === "blind" ? "blind" : "site-specific"}${rs.pdb_source ? `, ${rs.pdb_source}` : ""}${rs.exhaustiveness != null ? `, exhaustiveness ${rs.exhaustiveness}` : ""}.` : ""),
       });
     } catch (e: any) {
       setStatus({ kind: "err", text: e.message || "Error" });
@@ -248,6 +266,17 @@ export function DockDetailPanel({ r, receptorPdbPath }: { r: DockResultRow; rece
   const hasCompInfo = r.n_valid != null || r.pose_self_consistency != null || (!!r.status && r.status !== "ok");
   return (
     <div className="bg-surface2/40 px-5 py-3.5">
+      {r.suggested_action && (
+        <DetailSection title="Failure diagnosis">
+          <div className="rounded-lg border border-amber/30 bg-amber/10 px-3 py-2.5 text-[12.5px]">
+            <div className="text-ink">
+              <b>{FAILURE_CATEGORY_LABELS[r.category || ""] || r.category || "Failed"}</b>
+              {r.reason || r.error ? ` — ${r.reason || r.error}` : ""}
+            </div>
+            <div className="mt-1 text-amber">{r.suggested_action}</div>
+          </div>
+        </DetailSection>
+      )}
       {hasDocking && (
         <DetailSection title="Docking">
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-inkmut">

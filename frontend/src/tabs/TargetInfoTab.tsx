@@ -4,7 +4,8 @@ import { PlainTargetSelect } from "../components/TargetPicker";
 import { SectionIntro, ResultHeader, ResultName, Stat } from "../components/Shell";
 import { EmptyState, ErrorBox, Notice, Spinner } from "../components/Feedback";
 import { ValidationPanel } from "../components/ValidationPanel";
-import type { BucketFile } from "../lib/types";
+import { EnrichmentStatsPanel } from "../components/EnrichmentStatsPanel";
+import type { BucketFile, EnrichmentStats } from "../lib/types";
 
 export function TargetInfoTab() {
   const [targetId, setTargetId] = useState("");
@@ -13,6 +14,7 @@ export function TargetInfoTab() {
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [files, setFiles] = useState<BucketFile[]>([]);
   const [dockDetail, setDockDetail] = useState<any>(null);
+  const [enrichStats, setEnrichStats] = useState<EnrichmentStats | null>(null);
 
   useEffect(() => {
     if (!targetId) return;
@@ -20,15 +22,17 @@ export function TargetInfoTab() {
     setState("loading");
     (async () => {
       try {
-        const [m, b, dock] = await Promise.all([
+        const [m, b, dock, stats] = await Promise.all([
           api.factoryMetrics(targetId),
           api.factoryBucket(targetId),
           api.dockingStatus().catch(() => ({ target_details: [] } as any)),
+          api.enrichmentStats(targetId).catch(() => null),
         ]);
         if (cancelled) return;
         setMetrics(m.metrics || {});
         setFiles(b.files || []);
         setDockDetail((dock.target_details || []).find((d: any) => d.target_id === targetId) || null);
+        setEnrichStats(stats);
         setState("done");
       } catch (e: any) {
         if (!cancelled) {
@@ -85,6 +89,7 @@ export function TargetInfoTab() {
                 <ValidationPanel details={[dockDetail]} />
               </div>
             )}
+            {enrichStats && <EnrichmentStatsPanel stats={enrichStats} />}
             {!!plots.length && (
               <>
                 <div className="px-5 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wide text-brand-700">QSAR validation plots</div>

@@ -131,7 +131,7 @@ export const referenceLigandSdf = (targetId: string) =>
 export const submitCustomReceptor = (body: { target_id: string; pdb_id: string; ligand_resname?: string }) =>
   api<{ job_id: string }>("/api/docking/receptor/custom", json(body));
 export const customReceptorJob = (jid: string) =>
-  api<{ status: string; profile?: ReceptorProfile; error?: string }>(`/api/docking/receptor/custom/job/${jid}`);
+  api<{ status: string; step?: string | null; profile?: ReceptorProfile; error?: string }>(`/api/docking/receptor/custom/job/${jid}`);
 
 // ---------- docking submit / poll ----------
 export const submitDocking = (target_id: string, smiles: string[], advanced: AdvancedDockingBody | null) =>

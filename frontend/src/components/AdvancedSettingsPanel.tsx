@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { AdvancedDockingState } from "../lib/useAdvancedDocking";
+import { ReceptorBeforeAfter } from "./ReceptorBeforeAfter";
+import { RedockOverlay } from "./RedockOverlay";
 
 const STATUS_CLS: Record<string, string> = {
   muted: "text-inkmut",
@@ -23,6 +25,8 @@ export function AdvancedSettingsPanel({
   validated?: boolean | null;
 }) {
   const [open, setOpen] = useState(openByDefault);
+  const [showBeforeAfter, setShowBeforeAfter] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(false);
 
   return (
     <div className="mt-3.5 rounded-xl border border-line">
@@ -90,6 +94,35 @@ export function AdvancedSettingsPanel({
                 })}
             </div>
             {adv.structureStatus && <div className={`field-hint ${STATUS_CLS[adv.structureStatus.kind]}`}>{adv.structureStatus.text}</div>}
+            {adv.customProfile?.raw_pdb_path && adv.customProfile?.receptor_pdb && (
+              <>
+                <button type="button" className="btn-link mt-1.5" onClick={() => setShowBeforeAfter((s) => !s)}>
+                  {showBeforeAfter ? "Hide" : "Compare"} before/after receptor prep
+                </button>
+                {showBeforeAfter && (
+                  <div className="mt-2">
+                    <ReceptorBeforeAfter rawPdbPath={adv.customProfile.raw_pdb_path} cleanPdbPath={adv.customProfile.receptor_pdb} />
+                  </div>
+                )}
+              </>
+            )}
+            {adv.customProfile?.redocked_pose_pdb && adv.customProfile?.crystal_ligand_path && (
+              <>
+                <button type="button" className="btn-link mt-1.5" onClick={() => setShowOverlay((s) => !s)}>
+                  {showOverlay ? "Hide" : "Show"} redocking overlay (experimental vs. redocked pose)
+                </button>
+                {showOverlay && (
+                  <div className="mt-2">
+                    <RedockOverlay
+                      receptorPdbPath={adv.customProfile.receptor_pdb}
+                      crystalLigandPath={adv.customProfile.crystal_ligand_path}
+                      redockedPosePdb={adv.customProfile.redocked_pose_pdb}
+                      referenceRmsd={adv.customProfile.reference_rmsd}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="mb-3">
@@ -125,7 +158,11 @@ export function AdvancedSettingsPanel({
           <div className="mb-3">
             <label className="field-label">Binding box</label>
             <div className="field-hint">
-              Automatic (ligand-centered) unless you drag it in "View binding site in 3D" above, or set it from selected residues.
+              {adv.siteMethod === "manual"
+                ? "Manual — set from the residues you pick in \"View binding site in 3D\" above."
+                : adv.siteMethod === "automatic"
+                ? "Automatic — centered on the co-crystallized reference ligand; drag it in \"View binding site in 3D\" above to adjust."
+                : "Not yet defined — choose Automatic or Manual in the Docking mode section above."}
             </div>
           </div>
           <button type="button" className="btn-link" onClick={() => adv.resetToAutomatic()}>

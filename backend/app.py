@@ -612,28 +612,36 @@ def docking_receptor_custom(body: CustomReceptorBody):
     from scripts.batch_validate import gene_for_target
 
     jid = uuid.uuid4().hex[:12]
-    _CUSTOM_RECEPTOR_JOBS[jid] = {"status": "queued", "profile": None, "error": None}
+    _CUSTOM_RECEPTOR_JOBS[jid] = {"status": "queued", "step": "Queued", "profile": None, "error": None}
 
     def work():
         job = _CUSTOM_RECEPTOR_JOBS[jid]
         job["status"] = "running"
+        def _step(label):
+            job["step"] = label
         try:
             out_dir = os.path.join("docking_targets", "_custom")
             work_id = f"{body.target_id}__{body.pdb_id}"
             os.makedirs(os.path.join(out_dir, work_id), exist_ok=True)
             raw_pdb = os.path.join(out_dir, work_id, f"{body.pdb_id}_raw.pdb")
+            _step(f"Fetching {body.pdb_id} from RCSB")
             fetch_pdb(body.pdb_id, raw_pdb)
             chain = body.chain
             if not chain and body.ligand_resname:
+                _step("Locating chain containing the reference ligand")
                 chain = chain_for_ligand(raw_pdb, body.ligand_resname)
                 if chain is None:
                     raise RuntimeError(f"ligand '{body.ligand_resname}' not found in any chain of {body.pdb_id}")
             profile = RP.build_receptor(raw_pdb, work_id, name=f"{body.target_id} ({body.pdb_id}, manual)",
-                                        ref_resname=body.ligand_resname, chain=chain, out_dir=out_dir)
+                                        ref_resname=body.ligand_resname, chain=chain, out_dir=out_dir, progress=_step)
             profile["target_id"] = body.target_id   # advertise the REAL target_id to the caller, not the scratch work_id
+            # Original, unmodified structure — lets the UI show a before/
+            # after comparison against the stripped/repaired receptor_pdb.
+            profile["raw_pdb_path"] = os.path.abspath(raw_pdb)
 
             if body.ligand_resname:
                 try:
+                    _step("Redocking the known reference ligand (validation)")
                     from scripts.validate_target import fetch_ligand_smiles, make_crystal_sdf
                     lig_smiles = fetch_ligand_smiles(body.ligand_resname)
                     crystal_sdf = make_crystal_sdf(raw_pdb, body.ligand_resname,
@@ -642,6 +650,11 @@ def docking_receptor_custom(body: CustomReceptorBody):
                     redock = DOCK_PIPE.redock_reference(profile, lig_smiles, crystal_sdf=crystal_sdf, rmsd_threshold=2.0)
                     profile["validated"] = bool(redock.get("validated"))
                     profile["reference_rmsd"] = redock.get("reference_rmsd")
+                    # Both poses, for an overlay view — not just the RMSD
+                    # number. crystal_ligand_path is served the same way
+                    # raw_pdb_path/receptor_pdb already are (receptor_file).
+                    profile["redocked_pose_pdb"] = redock.get("redocked_pose_pdb")
+                    profile["crystal_ligand_path"] = os.path.abspath(crystal_sdf) if os.path.exists(crystal_sdf) else None
                     if not redock.get("validated"):
                         profile["redock_note"] = (
                             f"redocking RMSD {redock['reference_rmsd']} Å exceeds the 2 Å threshold"
@@ -652,6 +665,7 @@ def docking_receptor_custom(body: CustomReceptorBody):
             else:
                 profile["redock_note"] = "no ligand resname given — redocking check skipped"
 
+            job["step"] = "Done"
             job["profile"] = profile
             job["status"] = "done"
         except Exception as e:
@@ -665,7 +679,7 @@ def docking_receptor_custom_job(jid: str):
     job = _CUSTOM_RECEPTOR_JOBS.get(jid)
     if not job:
         raise HTTPException(404, "unknown job")
-    r = {"status": job["status"]}
+    r = {"status": job["status"], "step": job.get("step")}
     if job["status"] == "done":
         r["profile"] = job["profile"]
     if job["status"] == "error":

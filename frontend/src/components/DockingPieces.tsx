@@ -224,25 +224,112 @@ export function FreshDecoyButton({ smiles, targetId, advanced }: { smiles: strin
   );
 }
 
+/** One labeled group in the consolidated per-compound detail view. Callers
+    decide whether a section applies at all (conditionally rendering the
+    whole <DetailSection> rather than this component guessing from its
+    children) — a generic "are my children empty" heuristic can't tell a
+    real wrapper <div> with nothing conditionally rendered inside it from
+    one with real content, so that decision belongs with the caller, who
+    actually knows. */
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-3.5 last:mb-0">
+      <h5 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wide text-brand-700">{title}</h5>
+      {children}
+    </div>
+  );
+}
+
 export function DockDetailPanel({ r, receptorPdbPath }: { r: DockResultRow; receptorPdbPath?: string | null }) {
   const canView = !!r.interaction_png;
+  const g = r.gnina;
+  const ec = r.enrichment_context;
+  const hasDocking = r.vina_score != null || !!r.confidence || (g && (g.cnn_score != null || g.cnn_affinity != null || g.gnina_affinity != null));
+  const hasCompInfo = r.n_valid != null || r.pose_self_consistency != null || (!!r.status && r.status !== "ok");
   return (
     <div className="bg-surface2/40 px-5 py-3.5">
-      {canView && r.residue_overlap_pct != null && (
-        <div className="mb-2 text-[12.5px] text-inkmut">Shares {r.residue_overlap_pct}% of the reference drug's contact residues.</div>
+      {hasDocking && (
+        <DetailSection title="Docking">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-inkmut">
+            {r.vina_score != null && (
+              <span>
+                Vina score: <b className="text-ink">{r.vina_score} kcal/mol</b>
+              </span>
+            )}
+            {r.confidence && (
+              <span>
+                Confidence: <b className="text-ink">{r.confidence}</b>
+              </span>
+            )}
+            {g && (g.cnn_score != null || g.cnn_affinity != null || g.gnina_affinity != null) && (
+              <span>
+                GNINA:{" "}
+                <b className="text-ink">
+                  {g.cnn_score != null ? `CNN score ${g.cnn_score}` : ""}
+                  {g.cnn_affinity != null ? ` · CNN affinity ${g.cnn_affinity}` : ""}
+                  {g.gnina_affinity != null ? ` · ${g.gnina_affinity} kcal/mol` : ""}
+                </b>
+              </span>
+            )}
+          </div>
+        </DetailSection>
       )}
-      {canView && r.interaction_source && <div className="mb-2 text-[12.5px] text-inkmut">Interaction detection: {r.interaction_source}.</div>}
-      {canView ? (
-        <img src={`data:image/png;base64,${r.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
-      ) : (
-        <div className="py-2 text-[13px] text-inkmut">No interaction diagram for this pose.</div>
+
+      <DetailSection title="Binding site & interactions">
+        {r.residue_overlap_pct != null && (
+          <div className="mb-2 text-[12.5px] text-inkmut">Shares {r.residue_overlap_pct}% of the reference drug's contact residues.</div>
+        )}
+        {canView && r.interaction_source && <div className="mb-2 text-[12.5px] text-inkmut">Interaction detection: {r.interaction_source}.</div>}
+        {canView ? (
+          <img src={`data:image/png;base64,${r.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+        ) : (
+          <div className="py-2 text-[13px] text-inkmut">No interaction diagram for this pose.</div>
+        )}
+        <InteractionTable interactions={r.interactions} />
+      </DetailSection>
+
+      {r.enrichment_percentile != null && (
+        <DetailSection title="Validation">
+          <div className="text-[12.5px] text-inkmut">
+            Enrichment: <b className="text-ink">{r.enrichment_percentile}th percentile</b>
+            {ec?.beats_best_known_active ? " · beats the best known active" : ""}
+            {ec?.n_active != null || ec?.n_decoy != null
+              ? ` (vs. ${ec?.n_active ?? "?"} known active(s), ${ec?.n_decoy ?? "?"} decoys${ec?.decoy_method ? `, ${ec.decoy_method}` : ""})`
+              : ""}
+          </div>
+        </DetailSection>
       )}
-      <InteractionTable interactions={r.interactions} />
-      {r.pose_pdb && <PoseViewer posePdb={r.pose_pdb} receptorPdbPath={receptorPdbPath} interactions={r.interactions} />}
+
       {r.pose_pdb && (
-        <div className="mt-2">
-          <DownloadComplexButton smiles={r.smiles} posePdb={r.pose_pdb} receptorPdbPath={receptorPdbPath} />
-        </div>
+        <DetailSection title="3D pose">
+          <PoseViewer posePdb={r.pose_pdb} receptorPdbPath={receptorPdbPath} interactions={r.interactions} />
+          <div className="mt-2">
+            <DownloadComplexButton smiles={r.smiles} posePdb={r.pose_pdb} receptorPdbPath={receptorPdbPath} />
+          </div>
+        </DetailSection>
+      )}
+
+      {hasCompInfo && (
+        <DetailSection title="Computational info">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-inkmut">
+            {r.n_valid != null && (
+              <span>
+                PoseBusters-valid poses: <b className="text-ink">{r.n_valid}</b>
+              </span>
+            )}
+            {r.pose_self_consistency != null && (
+              <span>
+                Pose self-consistency: <b className="text-ink">{r.pose_self_consistency}</b>
+              </span>
+            )}
+            {r.status && r.status !== "ok" && (
+              <span className="text-amber">
+                Status: <b>{r.status}</b>
+                {r.reason ? ` — ${r.reason}` : ""}
+              </span>
+            )}
+          </div>
+        </DetailSection>
       )}
     </div>
   );

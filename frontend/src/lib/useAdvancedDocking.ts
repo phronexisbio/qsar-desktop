@@ -210,8 +210,11 @@ export function useAdvancedDocking(targetId: string) {
       try {
         const sub = await api.submitCustomReceptor({ target_id: targetId, pdb_id: pdbId, ligand_resname: resname });
         while (true) {
-          await api.sleep(3000);
+          await api.sleep(1500);
           const j = await api.pollRetry(() => api.customReceptorJob(sub.job_id));
+          if (j.status === "running" && j.step) {
+            setStructureStatus({ kind: "muted", text: `${j.step}…` });
+          }
           if (j.status === "done" && j.profile) {
             setCustomProfile(j.profile);
             const p = j.profile;

@@ -306,7 +306,7 @@ def box_from_receptor(clean_pdb_path, padding=4.0, min_size=20.0):
 
 # ---------- orchestration ----------
 def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
-                   out_dir="docking_targets", padding=8.0):
+                   out_dir="docking_targets", padding=8.0, progress=None):
     """Runs the full strip -> repair -> PDBQT pipeline and returns a profile
        dict with ABSOLUTE file paths — no docking_registry.json I/O. Used by
        both prepare_receptor() (build-time, persists into the shared
@@ -314,17 +314,32 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
        structure override (deliberately never persisted — an expert's
        per-request pick shouldn't silently overwrite the vetted default, and
        staying out of the shared registry file avoids racing a concurrent
-       batch_validate.py run that owns writes to it)."""
+       batch_validate.py run that owns writes to it).
+
+       progress, if given, is called with a short human-readable label
+       before each real stage starts — the on-demand manual-structure path
+       (app.py's /api/docking/receptor/custom) surfaces these live so a
+       user watching a ~1-2 minute prep isn't just staring at one static
+       'preparing...' message the whole time."""
+    def _p(label):
+        if progress:
+            progress(label)
+
     tdir = os.path.join(out_dir, target_id)
     os.makedirs(tdir, exist_ok=True)
 
+    _p("Extracting reference ligand")
     ref_coords, ref_name, n_ref = extract_reference_ligand(pdb_path, ref_resname, chain)
     center, box_size = grid_box_from_ligand(ref_coords, padding=padding)
 
+    _p("Stripping to protein-only (removing waters/heteroatoms)")
     prot = strip_to_protein(pdb_path, os.path.join(tdir, "protein_raw.pdb"), chain=chain)
+    _p("Repairing (PDBFixer: missing atoms/residues, hydrogenation)")
     clean = repair_receptor(prot, os.path.join(tdir, "receptor_clean.pdb"))
+    _p("Building PDBQT (Meeko: atom typing, charges)")
     rec_pdbqt = receptor_to_pdbqt(clean, os.path.join(tdir, "receptor.pdbqt"))
 
+    _p("Computing binding site (pocket residues, grid box)")
     try:
         binding_site_residues = pocket_residues(clean, ref_coords, cutoff=5.0)
     except Exception:

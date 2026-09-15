@@ -108,6 +108,13 @@ def redock_reference(profile, reference_smiles, crystal_sdf=None, engine=None, r
         return {"status": "no_pose"}
     top = min(poses, key=lambda p: p.score)
     out = {"status": "ok", "engine": engine.name, "top_score": round(top.score, 2), "n_poses": len(poses)}
+    # The redocked pose itself — same H-completion treatment dock_compound's
+    # pose_pdb uses, so an overlay view can show it alongside the crystal
+    # pose instead of the caller only ever seeing the RMSD *number*.
+    try:
+        out["redocked_pose_pdb"] = pose_pdb_with_hydrogens(top.mol)
+    except Exception:
+        pass  # non-fatal — the RMSD/validated result below is still meaningful without it
     if crystal_sdf and os.path.exists(crystal_sdf):
         crystal = next((m for m in Chem.SDMolSupplier(crystal_sdf, removeHs=True) if m), None)
         if crystal is not None:

@@ -174,6 +174,8 @@ export const submitScreen = (target_id: string, smiles: string[], advanced: Adva
 export const screenJob = (jid: string) => api<ScreenJobStatus>(`/api/screen/job/${jid}`);
 export const cancelScreen = (jid: string) => api<{ ok: boolean }>(`/api/screen/cancel/${jid}`, { method: "POST" });
 export const screenExportUrl = (jid: string) => apiUrl(`/api/screen/job/${jid}/export.csv`);
+export const screenExportPackageUrl = (jid: string) => apiUrl(`/api/screen/job/${jid}/export_package`);
+export const dockingExportPackageUrl = (jid: string) => apiUrl(`/api/docking/job/${jid}/export_package`);
 
 // ---------- on-demand downloads ----------
 export const downloadsStatus = () => api<DownloadsStatus>("/api/downloads/status");

@@ -9,6 +9,7 @@ import { SectionIntro } from "../components/Shell";
 import { EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { ConfidenceDot } from "../components/Feedback";
 import { DockDetailPanel, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
+import { ResidueFrequencyTable } from "../components/ResidueFrequencyTable";
 import type { AdvancedDockingBody, DockResultRow } from "../lib/types";
 
 const DOCK_CONF_COLOR: Record<string, string> = { high: "bg-brand-500", medium: "bg-amber", low: "bg-clay", none: "bg-slateout" };
@@ -78,6 +79,7 @@ function DockingReady() {
   const [validated, setValidated] = useState<boolean | null>(null);
   const [referenceRmsd, setReferenceRmsd] = useState<number | null>(null);
   const [pdbSource, setPdbSource] = useState<string | null>(null);
+  const [completedJobId, setCompletedJobId] = useState<string | null>(null);
 
   const run = async () => {
     setError("");
@@ -129,6 +131,7 @@ function DockingReady() {
           setResults(s.results);
           setReceptorPdbPath(s.receptor_pdb_path || null);
           setCancelled(s.status === "cancelled");
+          setCompletedJobId(r.job_id);
           setState("done");
           setJobId(null);
           return;
@@ -207,6 +210,7 @@ function DockingReady() {
               validated={validated}
               referenceRmsd={referenceRmsd}
               pdbSource={pdbSource}
+              jobId={completedJobId}
             />
           </>
         )}
@@ -224,6 +228,7 @@ function DockResultsTable({
   validated,
   referenceRmsd,
   pdbSource,
+  jobId,
 }: {
   results: DockResultRow[];
   caveat: string | null;
@@ -233,6 +238,7 @@ function DockResultsTable({
   validated?: boolean | null;
   referenceRmsd?: number | null;
   pdbSource?: string | null;
+  jobId?: string | null;
 }) {
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
@@ -318,6 +324,14 @@ function DockResultsTable({
           </tbody>
         </table>
       </div>
+      {jobId && (
+        <div className="border-t border-line px-5 py-2.5 text-right">
+          <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
+            Download full experiment package (.zip)
+          </a>
+        </div>
+      )}
+      <ResidueFrequencyTable results={results} fileBaseName={`${targetId}_docking`} />
     </div>
   );
 }

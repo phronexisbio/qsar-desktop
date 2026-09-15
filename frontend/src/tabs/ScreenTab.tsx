@@ -12,6 +12,7 @@ import { SectionIntro, ResultHeader, ResultName, Stat } from "../components/Shel
 import { ConfidenceDot, Disclaimer, EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { LeafLattice } from "../components/Icons";
 import { DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
+import { ResidueFrequencyTable } from "../components/ResidueFrequencyTable";
 import { tierClass } from "../lib/tierClass";
 import type { AdvancedDockingBody, DockResultRow, ScreenResult } from "../lib/types";
 
@@ -42,6 +43,7 @@ type FlowState =
       advanced: AdvancedDockingBody | null;
       caveat: string | null;
       cancelled?: boolean;
+      jobId?: string;
       validated?: boolean | null;
       referenceRmsd?: number | null;
       pdbSource?: string | null;
@@ -89,6 +91,7 @@ export function ScreenTab() {
               advanced: advBody,
               caveat: r.caveat || null,
               cancelled: s.status === "cancelled",
+              jobId: r.job_id,
               validated: r.validated ?? null,
               referenceRmsd: r.reference_rmsd ?? null,
               pdbSource: r.pdb_source ?? null,
@@ -183,6 +186,7 @@ export function ScreenTab() {
               validated={flow.validated}
               referenceRmsd={flow.referenceRmsd}
               pdbSource={flow.pdbSource}
+              jobId={flow.jobId}
             />
           </>
         )}
@@ -338,10 +342,18 @@ function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string;
           </div>
           <div className="flex items-center justify-between border-t border-line px-5 py-2.5">
             <span className="text-[12.5px] text-inkmut">{d.skipped.length ? `Skipped: ${d.skipped.join(", ")}` : ""}</span>
-            <a className="btn-link" href={api.screenExportUrl(jobId)} download>
-              Download CSV
-            </a>
+            <div className="flex gap-3">
+              <a className="btn-link" href={api.screenExportUrl(jobId)} download>
+                Download CSV
+              </a>
+              {d.docking_used && (
+                <a className="btn-link" href={api.screenExportPackageUrl(jobId)} download>
+                  Download full experiment package (.zip)
+                </a>
+              )}
+            </div>
           </div>
+          <ResidueFrequencyTable results={d.shortlist.map((r) => r.docking)} fileBaseName={`${d.target_id}_screen`} />
         </>
       )}
     </div>
@@ -360,12 +372,14 @@ function GeneOnlyDockResults({
   validated,
   referenceRmsd,
   pdbSource,
+  jobId,
 }: {
   results: DockResultRow[];
   receptorPdbPath: string | null;
   targetId: string;
   advanced: AdvancedDockingBody | null;
   caveat: string | null;
+  jobId?: string;
   validated?: boolean | null;
   referenceRmsd?: number | null;
   pdbSource?: string | null;
@@ -427,6 +441,14 @@ function GeneOnlyDockResults({
           </tbody>
         </table>
       </div>
+      {jobId && (
+        <div className="border-t border-line px-5 py-2.5 text-right">
+          <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
+            Download full experiment package (.zip)
+          </a>
+        </div>
+      )}
+      <ResidueFrequencyTable results={results} fileBaseName={`${targetId}_screen`} />
     </div>
   );
 }

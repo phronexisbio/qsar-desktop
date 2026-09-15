@@ -789,6 +789,34 @@ class DockBody(BaseModel):
     advanced: Optional[AdvancedDocking] = None
 
 
+def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles):
+    """A6 — reproducibility snapshot for one docking/screen run: everything
+       needed to redo it later (or write a Methods section from it) that
+       isn't already implicit in the code itself. Captured at SUBMIT time
+       (not read back from a job dict after completion, which nulls the
+       profile out) — see docking_submit's own comment on the same issue
+       for receptor_pdb_path/dock_validated."""
+    import datetime
+    from versions import snapshot as version_snapshot
+    return {
+        "target_id": target_id,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "n_compounds_submitted": len(smiles),
+        "docking_mode": "blind" if profile.get("site_source") == "blind_whole_protein" else "site_specific",
+        "box_center": profile.get("center"),
+        "box_size": profile.get("box_size"),
+        "pdb_source": profile.get("pdb_source"),
+        "receptor_validated": bool(profile.get("validated")),
+        "reference_rmsd": profile.get("reference_rmsd"),
+        "engine": getattr(engine, "name", None),
+        "exhaustiveness": getattr(engine, "exhaustiveness", None),
+        "n_poses": n_poses,
+        "rescorer": type(rescorer).__name__ if rescorer is not None else None,
+        "ligand_embedding_seeds": [0xf00d, 1, 42, 7],  # fixed constant — see docking/ligand_prep.py's prepare_ligand()
+        "software_versions": version_snapshot(),
+    }
+
+
 @app.post("/api/docking/submit")
 def docking_submit(body: DockBody):
     import uuid
@@ -799,6 +827,7 @@ def docking_submit(body: DockBody):
     if not smiles:
         raise HTTPException(400, "No SMILES provided.")
     jid = uuid.uuid4().hex[:12]
+    run_metadata = _build_run_metadata(body.target_id, profile, engine, rescorer, n_poses, smiles)
     # captured now (not read back off job["profile"], which _run_docking_job
     # nulls out once done) — the 3D pose viewer needs the receptor that was
     # ACTUALLY docked against, which for an Advanced Settings custom_profile
@@ -818,7 +847,7 @@ def docking_submit(body: DockBody):
     _DOCK_JOBS[jid] = {"status": "queued", "total": len(smiles), "done": 0, "results": [], "caveat": caveat,
                        "profile": profile, "smiles": smiles, "engine": engine, "rescorer": rescorer, "n_poses": n_poses,
                        "receptor_pdb_path": receptor_pdb_path, "dock_validated": dock_validated,
-                       "reference_rmsd": reference_rmsd, "pdb_source": pdb_source}
+                       "reference_rmsd": reference_rmsd, "pdb_source": pdb_source, "run_metadata": run_metadata}
     _run_docking_job(jid)      # background thread
     return {"job_id": jid, "total": len(smiles), "caveat": caveat, "validated": dock_validated,
             "reference_rmsd": reference_rmsd, "pdb_source": pdb_source}
@@ -881,6 +910,21 @@ def docking_job(jid: str):
     if job["status"] == "error":
         r["error"] = job.get("error")
     return r
+
+
+@app.get("/api/docking/job/{jid}/export_package")
+def docking_export_package(jid: str):
+    """B13's 'one-click experiment package' — metadata.json (A6's
+       reproducibility snapshot), receptor.pdb, results.csv, and a
+       poses/+interactions/ folder per compound, as one ZIP."""
+    from fastapi.responses import StreamingResponse
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    from export_package import build_zip
+    data = build_zip(job.get("run_metadata") or {}, job.get("receptor_pdb_path"), job.get("results") or [])
+    return StreamingResponse(iter([data]), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="docking_{jid}.zip"'})
 
 
 class FreshDecoyBody(BaseModel):
@@ -999,6 +1043,23 @@ def _run_screen_job(jid, target_id, smiles, advanced=None):
         try:
             result = SCREEN.run(target_id, smiles, progress=on_progress, advanced=advanced)
             job["result"] = result
+            import datetime
+            from versions import snapshot as version_snapshot
+            job["run_metadata"] = {
+                "target_id": target_id,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "n_compounds_submitted": len(smiles),
+                "docking_mode": result.get("docking_mode"),
+                "box_center": result.get("box_center"),
+                "box_size": result.get("box_size"),
+                "pdb_source": result.get("pdb_source"),
+                "receptor_validated": bool(result.get("dock_validated")),
+                "reference_rmsd": result.get("reference_rmsd"),
+                "exhaustiveness": result.get("exhaustiveness"),
+                "n_poses": result.get("n_poses"),
+                "ligand_embedding_seeds": [0xf00d, 1, 42, 7],
+                "software_versions": version_snapshot(),
+            }
             job["status"] = "done"
         except JobCancelled:
             job["status"] = "cancelled"
@@ -1028,6 +1089,28 @@ def screen_job(jid: str):
     if job["status"] == "error":
         r["error"] = job.get("error")
     return r
+
+
+@app.get("/api/screen/job/{jid}/export_package")
+def screen_export_package(jid: str):
+    """Same 'one-click experiment package' as /api/docking/job/{jid}/
+       export_package, adapted for the Screen pipeline's shortlist shape
+       (each row's docking result nests under row['docking'] rather than
+       being the row itself)."""
+    from fastapi.responses import StreamingResponse
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    result = job["result"]
+    flat_results = []
+    for row in result.get("shortlist", []):
+        d = dict(row.get("docking") or {})
+        d["smiles"] = row.get("smiles")
+        flat_results.append(d)
+    from export_package import build_zip
+    data = build_zip(job.get("run_metadata") or {}, result.get("receptor_pdb_path"), flat_results)
+    return StreamingResponse(iter([data]), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="screen_{jid}.zip"'})
 
 
 @app.get("/api/screen/job/{jid}/export.csv")

@@ -287,4 +287,13 @@ def run(target_id, smiles_list, make_diagram=True, progress=None, advanced=None)
         "dock_validated": dock_validated if dock_ran else None,
         "reference_rmsd": dprofile.get("reference_rmsd") if dock_ran and dprofile else None,
         "pdb_source": dprofile.get("pdb_source") if dock_ran and dprofile else None,
+        # A6 reproducibility metadata — the exact run parameters, not just
+        # the prose in methods_note. `engine`/`n_poses` only exist when
+        # dock_will_run was True (same scope dock_by_smiles was built in),
+        # which dock_ran already reflects, so this is safe.
+        "docking_mode": (("blind" if blind else "site_specific") if dock_ran else None),
+        "box_center": (dprofile.get("center") if dock_ran and dprofile else None),
+        "box_size": (dprofile.get("box_size") if dock_ran and dprofile else None),
+        "exhaustiveness": (engine.exhaustiveness if dock_ran else None),
+        "n_poses": (n_poses if dock_ran else None),
     }

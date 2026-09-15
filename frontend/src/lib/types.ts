@@ -237,7 +237,17 @@ export interface DockResultRow {
   interaction_png?: string | null;
   interaction_source?: string;
   residue_overlap_pct?: number | null;
-  interactions?: { name?: string; residue?: string; category?: string; label?: string; type?: string; distance?: number }[];
+  interactions?: {
+    name?: string;
+    residue?: string;
+    resname?: string;
+    resid?: number;
+    chain?: string;
+    category?: string;
+    label?: string;
+    type?: string;
+    distance?: number;
+  }[];
   pose_pdb?: string | null;
   enrichment_percentile?: number | null;
   enrichment_context?: { n_active?: number; n_decoy?: number; decoy_method?: string; beats_best_known_active?: boolean };

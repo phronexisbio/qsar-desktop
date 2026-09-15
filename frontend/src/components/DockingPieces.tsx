@@ -323,7 +323,19 @@ export function DockDetailPanel({
         )}
         {canView && r.interaction_source && <div className="mb-2 text-[12.5px] text-inkmut">Interaction detection: {r.interaction_source}.</div>}
         {canView ? (
-          <img src={`data:image/png;base64,${r.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+          <>
+            <img src={`data:image/png;base64,${r.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+            {jobId && (
+              <div className="mt-1.5 flex gap-2.5 text-[11.5px]">
+                <a className="btn-link" href={api.apiUrl(`/api/${reportKind}/job/${jobId}/interaction_diagram?smiles=${encodeURIComponent(r.smiles)}&fmt=svg`)} download>
+                  Download SVG
+                </a>
+                <a className="btn-link" href={api.apiUrl(`/api/${reportKind}/job/${jobId}/interaction_diagram?smiles=${encodeURIComponent(r.smiles)}&fmt=tiff`)} download>
+                  Download TIFF
+                </a>
+              </div>
+            )}
+          </>
         ) : (
           <div className="py-2 text-[13px] text-inkmut">No interaction diagram for this pose.</div>
         )}

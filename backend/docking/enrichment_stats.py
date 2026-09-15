@@ -26,14 +26,25 @@ from .enrichment import load_reference
 from .profile import load_profile
 
 
-def _fig_to_base64_png(fig):
+def _fig_to_bytes(fig, fmt="png", dpi=110):
+    """B13 — vector/high-res export: any matplotlib-supported format
+       (svg, tiff, pdf, ...), not just the base64 PNG embedded for
+       on-screen display. TIFF is rendered at print resolution (300dpi)
+       rather than the screen-display 110dpi."""
     import matplotlib
     matplotlib.use("Agg")
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
     import matplotlib.pyplot as plt
+    buf = io.BytesIO()
+    kwargs = {"format": fmt, "bbox_inches": "tight"}
+    if fmt.lower() not in ("svg", "pdf", "eps"):
+        kwargs["dpi"] = 300 if fmt.lower() in ("tif", "tiff") else dpi
+    fig.savefig(buf, **kwargs)
     plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    return buf.getvalue()
+
+
+def _fig_to_base64_png(fig):
+    return base64.b64encode(_fig_to_bytes(fig, fmt="png", dpi=110)).decode("ascii")
 
 
 def _dist_stats(scores):
@@ -63,7 +74,7 @@ def _enrichment_factors(y_sorted_best_first, prevalence):
     return out
 
 
-def _score_distribution_plot(actives, decoys):
+def _score_distribution_figure(actives, decoys):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(5, 3.2))
     bins = np.histogram(np.concatenate([actives, decoys]), bins=15)[1]
@@ -74,10 +85,14 @@ def _score_distribution_plot(actives, decoys):
     ax.set_title("Score distribution")
     ax.legend(fontsize=8)
     fig.tight_layout()
-    return _fig_to_base64_png(fig)
+    return fig
 
 
-def _roc_plot(fpr, tpr, auc):
+def _score_distribution_plot(actives, decoys):
+    return _fig_to_base64_png(_score_distribution_figure(actives, decoys))
+
+
+def _roc_figure(fpr, tpr, auc):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.plot(fpr, tpr, color="#2b6cb0", linewidth=2, label=f"AUC = {auc:.3f}")
@@ -87,10 +102,14 @@ def _roc_plot(fpr, tpr, auc):
     ax.set_title("ROC curve")
     ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
-    return _fig_to_base64_png(fig)
+    return fig
 
 
-def _pr_plot(precision, recall, pr_auc, prevalence):
+def _roc_plot(fpr, tpr, auc):
+    return _fig_to_base64_png(_roc_figure(fpr, tpr, auc))
+
+
+def _pr_figure(precision, recall, pr_auc, prevalence):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.plot(recall, precision, color="#e2621a", linewidth=2, label=f"AP = {pr_auc:.3f}")
@@ -100,10 +119,14 @@ def _pr_plot(precision, recall, pr_auc, prevalence):
     ax.set_title("Precision-recall curve")
     ax.legend(fontsize=8, loc="upper right")
     fig.tight_layout()
-    return _fig_to_base64_png(fig)
+    return fig
 
 
-def _enrichment_plot(y_sorted_best_first, prevalence):
+def _pr_plot(precision, recall, pr_auc, prevalence):
+    return _fig_to_base64_png(_pr_figure(precision, recall, pr_auc, prevalence))
+
+
+def _enrichment_figure(y_sorted_best_first, prevalence):
     import matplotlib.pyplot as plt
     n = len(y_sorted_best_first)
     fracs = np.arange(1, n + 1) / n
@@ -116,7 +139,11 @@ def _enrichment_plot(y_sorted_best_first, prevalence):
     ax.set_title("Enrichment curve")
     ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
-    return _fig_to_base64_png(fig)
+    return fig
+
+
+def _enrichment_plot(y_sorted_best_first, prevalence):
+    return _fig_to_base64_png(_enrichment_figure(y_sorted_best_first, prevalence))
 
 
 def compute_stats(target_id, include_plots=True):
@@ -197,3 +224,49 @@ def compute_stats(target_id, include_plots=True):
             "enrichment_curve": _enrichment_plot(y_sorted, prevalence),
         }
     return out
+
+
+PLOT_NAMES = ("score_distribution", "roc_curve", "pr_curve", "enrichment_curve")
+
+
+def render_plot(target_id, plot_name, fmt="svg"):
+    """B13 — regenerates ONE of the four validation plots for a target's
+       saved reference in an arbitrary matplotlib-supported format (svg,
+       tiff, pdf, ...) for download, rather than storing every format
+       inline in compute_stats()'s JSON (which only ever needs a base64
+       PNG for on-screen display). Raises FileNotFoundError (no saved
+       reference), ValueError (unknown plot_name / not enough data)."""
+    if plot_name not in PLOT_NAMES:
+        raise ValueError(f"unknown plot '{plot_name}' — expected one of {PLOT_NAMES}")
+    ref = load_reference(target_id)
+    if not ref:
+        raise FileNotFoundError("no saved reference for this target")
+
+    compounds = [c for c in ref["compounds"] if c.get("score") is not None]
+    active_scores = [c["score"] for c in compounds if c["label"] == "active"]
+    decoy_scores = [c["score"] for c in compounds if c["label"] == "decoy"]
+    if len(active_scores) < 2 or len(decoy_scores) < 2:
+        raise ValueError("not enough scored actives/decoys to plot")
+
+    a_arr = np.array(active_scores)
+    d_arr = np.array(decoy_scores)
+    y = np.array([1] * len(active_scores) + [0] * len(decoy_scores))
+    goodness = np.array([-s for s in active_scores] + [-s for s in decoy_scores])
+    prevalence = len(active_scores) / len(y)
+    order = np.argsort(-goodness)
+    y_sorted = y[order]
+
+    if plot_name == "score_distribution":
+        fig = _score_distribution_figure(a_arr, d_arr)
+    elif plot_name == "roc_curve":
+        fpr, tpr, _ = roc_curve(y, goodness)
+        auc = float(roc_auc_score(y, goodness))
+        fig = _roc_figure(fpr, tpr, auc)
+    elif plot_name == "pr_curve":
+        precision, recall, _ = precision_recall_curve(y, goodness)
+        pr_auc = float(average_precision_score(y, goodness))
+        fig = _pr_figure(precision, recall, pr_auc, prevalence)
+    else:  # enrichment_curve
+        fig = _enrichment_figure(y_sorted, prevalence)
+
+    return _fig_to_bytes(fig, fmt=fmt)

@@ -1,3 +1,4 @@
+import * as api from "../lib/api";
 import type { DistStats, EnrichmentStats } from "../lib/types";
 
 /** B7's decoy-validation statistical dashboard — expands the single free
@@ -6,7 +7,7 @@ import type { DistStats, EnrichmentStats } from "../lib/types";
     enrichment factor, BEDROC, downloadable plots, and the run settings
     the reference was actually built against (grid box/mode — the same
     transparency a live docking submission already gets). */
-export function EnrichmentStatsPanel({ stats }: { stats: EnrichmentStats }) {
+export function EnrichmentStatsPanel({ stats, targetId }: { stats: EnrichmentStats; targetId: string }) {
   if (stats.error) {
     return (
       <div className="mx-5 mb-5 rounded-lg border border-line bg-surface2/40 p-3.5 text-[12.5px] text-inkmut">{stats.error}</div>
@@ -73,15 +74,19 @@ export function EnrichmentStatsPanel({ stats }: { stats: EnrichmentStats }) {
           ).map(([key, label]) => (
             <figure key={key} className="m-0 overflow-hidden rounded-xl border border-line bg-surface">
               <img src={`data:image/png;base64,${stats.plots![key]}`} className="block w-full" />
-              <figcaption className="flex items-center justify-between px-2.5 py-2 text-[11.5px] text-inkmut">
+              <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2 text-[11.5px] text-inkmut">
                 {label}
-                <a
-                  className="btn-link"
-                  href={`data:image/png;base64,${stats.plots![key]}`}
-                  download={`${key}.png`}
-                >
-                  Download PNG
-                </a>
+                <span className="flex shrink-0 gap-2">
+                  <a className="btn-link" href={`data:image/png;base64,${stats.plots![key]}`} download={`${key}.png`}>
+                    PNG
+                  </a>
+                  <a className="btn-link" href={api.enrichmentPlotUrl(targetId, key, "svg")} download>
+                    SVG
+                  </a>
+                  <a className="btn-link" href={api.enrichmentPlotUrl(targetId, key, "tiff")} download>
+                    TIFF
+                  </a>
+                </span>
               </figcaption>
             </figure>
           ))}

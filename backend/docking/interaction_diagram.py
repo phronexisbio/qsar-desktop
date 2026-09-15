@@ -183,7 +183,7 @@ def detect_interactions(receptor_pdb, pose_mol):
 
 
 # ---------- rendering (LigPlot+ style) ----------
-def diagram_png(pose_mol, interactions, title="", source="", ref_residues=None):
+def _build_diagram_figure(pose_mol, interactions, title="", source="", ref_residues=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -244,5 +244,30 @@ def diagram_png(pose_mol, interactions, title="", source="", ref_residues=None):
     if legend:
         ax.legend(handles=legend, loc="lower center", ncol=3, fontsize=8, frameon=False,
                   bbox_to_anchor=(0.5, -0.04))
-    buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=150, bbox_inches="tight"); plt.close(fig)
+    return fig
+
+
+def diagram_png(pose_mol, interactions, title="", source="", ref_residues=None):
+    import matplotlib.pyplot as plt
+    fig = _build_diagram_figure(pose_mol, interactions, title=title, source=source, ref_residues=ref_residues)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def diagram_bytes(pose_mol, interactions, fmt="png", title="", source="", ref_residues=None):
+    """B13 — vector/high-res export of the 2D interaction diagram (svg,
+       tiff, pdf, ...) for download, built the same way as diagram_png but
+       returning raw bytes in the requested format instead of an inline
+       base64 PNG. Used on demand (regenerated from a job's already-stored
+       smiles/interactions, not kept per-format in job JSON)."""
+    import matplotlib.pyplot as plt
+    fig = _build_diagram_figure(pose_mol, interactions, title=title, source=source, ref_residues=ref_residues)
+    buf = io.BytesIO()
+    kwargs = {"format": fmt, "bbox_inches": "tight"}
+    if fmt.lower() not in ("svg", "pdf", "eps"):
+        kwargs["dpi"] = 300 if fmt.lower() in ("tif", "tiff") else 150
+    fig.savefig(buf, **kwargs)
+    plt.close(fig)
+    return buf.getvalue()

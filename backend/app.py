@@ -468,6 +468,33 @@ def enrichment_stats(target_id: str):
     return stats
 
 
+_PLOT_MEDIA_TYPES = {"svg": "image/svg+xml", "png": "image/png", "tif": "image/tiff", "tiff": "image/tiff", "pdf": "application/pdf"}
+
+
+@app.get("/api/targets/{target_id}/enrichment_stats/plot/{plot_name}")
+def enrichment_stats_plot(target_id: str, plot_name: str, fmt: str = "svg"):
+    """B13 — vector/high-res export of one of the four validation plots
+       (score_distribution/roc_curve/pr_curve/enrichment_curve), regenerated
+       on demand in the requested format rather than stored per-format in
+       the JSON stats payload above (which only ever needs the inline
+       base64 PNG for on-screen display)."""
+    if DOCK_AVAIL is None:
+        raise HTTPException(503, "Docking package not available")
+    fmt = fmt.lower()
+    if fmt not in _PLOT_MEDIA_TYPES:
+        raise HTTPException(400, f"unsupported format '{fmt}' — use one of {sorted(_PLOT_MEDIA_TYPES)}")
+    from fastapi.responses import StreamingResponse
+    from docking.enrichment_stats import render_plot
+    try:
+        data = render_plot(target_id, plot_name, fmt=fmt)
+    except FileNotFoundError:
+        raise HTTPException(404, f"no saved enrichment reference for '{target_id}'")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return StreamingResponse(iter([data]), media_type=_PLOT_MEDIA_TYPES[fmt],
+                             headers={"Content-Disposition": f'attachment; filename="{target_id}_{plot_name}.{fmt}"'})
+
+
 @app.get("/api/targets/{target_id}/structure_candidates")
 def structure_candidates(target_id: str):
     """Every qualifying structure for this target's gene from the Version 2
@@ -822,17 +849,20 @@ def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles, p
     }
 
 
-@app.post("/api/docking/submit")
-def docking_submit(body: DockBody):
+def _submit_docking(target_id, smiles_list, advanced, plant_source=None):
+    """Shared by /api/docking/submit (a normal user submission) and
+       /api/docking/job/{jid}/reproduce (A6 — resubmits with a past job's
+       EXACT saved parameters instead of whatever's currently the UI/
+       registry default) — identical job-creation logic either way."""
     import uuid
     if DOCK_AVAIL is None or not DOCK_AVAIL.status()["ready"]:
         raise HTTPException(503, "Docking is not available — install Vina and prep a receptor. See the Docking tab.")
-    profile, engine, rescorer, n_poses, caveat = _resolve_docking_setup(body.target_id, body.advanced)
-    smiles = [s.strip() for s in body.smiles if s and s.strip()]
+    profile, engine, rescorer, n_poses, caveat = _resolve_docking_setup(target_id, advanced)
+    smiles = [s.strip() for s in smiles_list if s and s.strip()]
     if not smiles:
         raise HTTPException(400, "No SMILES provided.")
     jid = uuid.uuid4().hex[:12]
-    run_metadata = _build_run_metadata(body.target_id, profile, engine, rescorer, n_poses, smiles, plant_source=body.plant_source)
+    run_metadata = _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles, plant_source=plant_source)
     # captured now (not read back off job["profile"], which _run_docking_job
     # nulls out once done) — the 3D pose viewer needs the receptor that was
     # ACTUALLY docked against, which for an Advanced Settings custom_profile
@@ -856,6 +886,56 @@ def docking_submit(body: DockBody):
     _run_docking_job(jid)      # background thread
     return {"job_id": jid, "total": len(smiles), "caveat": caveat, "validated": dock_validated,
             "reference_rmsd": reference_rmsd, "pdb_source": pdb_source}
+
+
+@app.post("/api/docking/submit")
+def docking_submit(body: DockBody):
+    return _submit_docking(body.target_id, body.smiles, body.advanced, plant_source=body.plant_source)
+
+
+@app.post("/api/docking/job/{jid}/reproduce")
+def docking_reproduce(jid: str):
+    """A6 — 'Reproduce this analysis': resubmits a past job with its EXACT
+       saved parameters (receptor FILE, box, exhaustiveness, GNINA on/off,
+       compound list) rather than whatever the registry/UI currently
+       defaults to. This matters because a target's default receptor/box
+       CAN change later (re-validation, a newer structure) — pinning the
+       actual file path recorded in run_metadata, via custom_profile,
+       guarantees byte-identical inputs regardless of what's changed
+       since, instead of silently drifting if we re-resolved 'automatic'
+       from today's registry. Only works while the original job is still
+       in memory (same lifetime limit /export_package already has)."""
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id")
+    if not target_id:
+        raise HTTPException(409, "this job has no reproducibility metadata to reproduce from")
+    receptor_pdb_path = job.get("receptor_pdb_path")
+    if not receptor_pdb_path or not os.path.exists(receptor_pdb_path):
+        raise HTTPException(409, "the exact receptor file this job used is no longer on disk — cannot reproduce exactly")
+    smiles = [r.get("smiles") for r in (job.get("results") or []) if r.get("smiles")]
+    if not smiles:
+        raise HTTPException(409, "no compound list recorded for this job")
+
+    custom_profile = {
+        "target_id": target_id,
+        "receptor_pdb": receptor_pdb_path,
+        "center": rm.get("box_center"),
+        "box_size": rm.get("box_size"),
+        "validated": job.get("dock_validated"),
+        "reference_rmsd": job.get("reference_rmsd"),
+        "pdb_source": rm.get("pdb_source"),
+    }
+    advanced = AdvancedDocking(
+        exhaustiveness=rm.get("exhaustiveness"),
+        n_poses=rm.get("n_poses"),
+        use_gnina=(False if rm.get("rescorer") == "NullRescorer" else None),
+        docking_mode=rm.get("docking_mode"),
+        custom_profile=custom_profile,
+    )
+    return _submit_docking(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
 
 
 def _run_docking_job(jid):
@@ -930,6 +1010,40 @@ def docking_export_package(jid: str):
     data = build_zip(job.get("run_metadata") or {}, job.get("receptor_pdb_path"), job.get("results") or [])
     return StreamingResponse(iter([data]), media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="docking_{jid}.zip"'})
+
+
+def _interaction_diagram_response(smiles, interactions, source, fmt):
+    fmt = fmt.lower()
+    if fmt not in _PLOT_MEDIA_TYPES:
+        raise HTTPException(400, f"unsupported format '{fmt}' — use one of {sorted(_PLOT_MEDIA_TYPES)}")
+    if not interactions:
+        raise HTTPException(404, "no interaction data for this compound")
+    from rdkit import Chem
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise HTTPException(400, "could not parse this SMILES")
+    from docking.interaction_diagram import diagram_bytes
+    data = diagram_bytes(mol, interactions, fmt=fmt, title=smiles[:30], source=source or "")
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(iter([data]), media_type=_PLOT_MEDIA_TYPES[fmt],
+                             headers={"Content-Disposition": f'attachment; filename="interaction_diagram.{fmt}"'})
+
+
+@app.get("/api/docking/job/{jid}/interaction_diagram")
+def docking_interaction_diagram(jid: str, smiles: str, fmt: str = "svg"):
+    """B13 — vector/high-res export of one compound's 2D interaction
+       diagram, regenerated on demand (from this job's already-stored
+       smiles + detected interactions, re-parsed with RDKit — the same
+       flat 2D depiction diagram_png already draws, just any matplotlib
+       format instead of always base64 PNG) rather than kept per-format
+       in job JSON."""
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    dock_row = next((r for r in (job.get("results") or []) if r.get("smiles") == smiles), None)
+    if dock_row is None:
+        raise HTTPException(404, "no docking result for this SMILES in this job")
+    return _interaction_diagram_response(smiles, dock_row.get("interactions"), dock_row.get("interaction_source"), fmt)
 
 
 class FreshDecoyBody(BaseModel):
@@ -1019,19 +1133,69 @@ class ScreenBody(BaseModel):
     plant_source: Optional[str] = None
 
 
-@app.post("/api/screen/submit")
-def screen_submit(body: ScreenBody):
+def _submit_screen(target_id, smiles_list, advanced, plant_source=None):
+    """Shared by /api/screen/submit and /api/screen/job/{jid}/reproduce
+       (A6) — see _submit_docking's docstring for why reproduce pins an
+       explicit custom_profile rather than re-resolving 'automatic'."""
     import uuid
-    smiles = [s.strip() for s in body.smiles if s and s.strip()]
+    smiles = [s.strip() for s in smiles_list if s and s.strip()]
     if not smiles:
         raise HTTPException(400, "No SMILES provided.")
-    if body.target_id not in MA.list_target_ids():
-        raise HTTPException(404, f"Unknown target '{body.target_id}'")
+    if target_id not in MA.list_target_ids():
+        raise HTTPException(404, f"Unknown target '{target_id}'")
     jid = uuid.uuid4().hex[:12]
     _SCREEN_JOBS[jid] = {"status": "queued", "step": 0, "step_label": "Queued",
                          "done": None, "total": None, "result": None, "error": None}
-    _run_screen_job(jid, body.target_id, smiles, body.advanced.model_dump() if body.advanced else None, plant_source=body.plant_source)
+    _run_screen_job(jid, target_id, smiles, advanced.model_dump() if advanced else None, plant_source=plant_source)
     return {"job_id": jid}
+
+
+@app.post("/api/screen/submit")
+def screen_submit(body: ScreenBody):
+    return _submit_screen(body.target_id, body.smiles, body.advanced, plant_source=body.plant_source)
+
+
+@app.post("/api/screen/job/{jid}/reproduce")
+def screen_reproduce(jid: str):
+    """A6 — same 'reproduce with exact saved parameters' as
+       docking_reproduce, adapted for the Screen pipeline's job/result
+       shape (compounds come from result['shortlist'], the receptor path
+       from result['receptor_pdb_path'])."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    result = job.get("result") or {}
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id") or result.get("target_id")
+    if not target_id:
+        raise HTTPException(409, "this job has no reproducibility metadata to reproduce from")
+    smiles = [r.get("input_smiles") or r.get("smiles") for r in (result.get("shortlist") or []) if r.get("smiles")]
+    if not smiles:
+        raise HTTPException(409, "no compound list recorded for this job")
+
+    advanced = None
+    receptor_pdb_path = result.get("receptor_pdb_path")
+    if receptor_pdb_path and os.path.exists(receptor_pdb_path):
+        # Docking ran and we know exactly which receptor file it used —
+        # pin it, same as docking_reproduce. If docking DIDN'T run in the
+        # original job (QSAR-only), advanced stays None and reproduction
+        # is QSAR-only again too — faithful either way.
+        custom_profile = {
+            "target_id": target_id,
+            "receptor_pdb": receptor_pdb_path,
+            "center": rm.get("box_center"),
+            "box_size": rm.get("box_size"),
+            "validated": rm.get("receptor_validated"),
+            "reference_rmsd": rm.get("reference_rmsd"),
+            "pdb_source": rm.get("pdb_source"),
+        }
+        advanced = AdvancedDocking(
+            exhaustiveness=rm.get("exhaustiveness"),
+            n_poses=rm.get("n_poses"),
+            docking_mode=rm.get("docking_mode"),
+            custom_profile=custom_profile,
+        )
+    return _submit_screen(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
 
 
 def _run_screen_job(jid, target_id, smiles, advanced=None, plant_source=None):
@@ -1118,6 +1282,20 @@ def screen_export_package(jid: str):
     data = build_zip(job.get("run_metadata") or {}, result.get("receptor_pdb_path"), flat_results)
     return StreamingResponse(iter([data]), media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="screen_{jid}.zip"'})
+
+
+@app.get("/api/screen/job/{jid}/interaction_diagram")
+def screen_interaction_diagram(jid: str, smiles: str, fmt: str = "svg"):
+    """Same as docking_interaction_diagram, adapted for the Screen
+       pipeline's shortlist shape."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    row = next((r for r in (job["result"].get("shortlist") or []) if r.get("smiles") == smiles), None)
+    if row is None or not row.get("docking"):
+        raise HTTPException(404, "no docking result for this SMILES in this job")
+    d = row["docking"]
+    return _interaction_diagram_response(smiles, d.get("interactions"), None, fmt)
 
 
 @app.get("/api/screen/job/{jid}/export.csv")

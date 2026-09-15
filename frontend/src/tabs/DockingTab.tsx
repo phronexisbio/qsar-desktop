@@ -81,6 +81,53 @@ function DockingReady() {
   const [referenceRmsd, setReferenceRmsd] = useState<number | null>(null);
   const [pdbSource, setPdbSource] = useState<string | null>(null);
   const [completedJobId, setCompletedJobId] = useState<string | null>(null);
+  const [reproducing, setReproducing] = useState(false);
+
+  /** Shared by a normal submit and A6's "Reproduce this analysis" —
+      both just need a job id to poll to completion the same way. */
+  const startPolling = async (jid: string) => {
+    setJobId(jid);
+    setState("polling");
+    while (true) {
+      await api.sleep(2000);
+      const s = await api.pollRetry(() => api.dockingJob(jid));
+      if (s.status === "done" || s.status === "cancelled") {
+        setResults(s.results);
+        setReceptorPdbPath(s.receptor_pdb_path || null);
+        setCancelled(s.status === "cancelled");
+        setCompletedJobId(jid);
+        setState("done");
+        setJobId(null);
+        return;
+      }
+      if (s.status === "error") {
+        setError(s.error || "failed");
+        setState("error");
+        setJobId(null);
+        return;
+      }
+      setProgress({ done: s.done, total: s.total });
+    }
+  };
+
+  const reproduce = async () => {
+    if (!completedJobId) return;
+    setReproducing(true);
+    setError("");
+    try {
+      const r = await api.reproduceDocking(completedJobId);
+      setCaveat(r.caveat || null);
+      setValidated(r.validated ?? null);
+      setReferenceRmsd(r.reference_rmsd ?? null);
+      setPdbSource(r.pdb_source ?? null);
+      await startPolling(r.job_id);
+    } catch (e: any) {
+      setError(e.message || "Error");
+      setState("error");
+    } finally {
+      setReproducing(false);
+    }
+  };
 
   const run = async () => {
     setError("");
@@ -123,28 +170,7 @@ function DockingReady() {
       setValidated(r.validated ?? null);
       setReferenceRmsd(r.reference_rmsd ?? null);
       setPdbSource(r.pdb_source ?? null);
-      setJobId(r.job_id);
-      setState("polling");
-      while (true) {
-        await api.sleep(2000);
-        const s = await api.pollRetry(() => api.dockingJob(r.job_id));
-        if (s.status === "done" || s.status === "cancelled") {
-          setResults(s.results);
-          setReceptorPdbPath(s.receptor_pdb_path || null);
-          setCancelled(s.status === "cancelled");
-          setCompletedJobId(r.job_id);
-          setState("done");
-          setJobId(null);
-          return;
-        }
-        if (s.status === "error") {
-          setError(s.error || "failed");
-          setState("error");
-          setJobId(null);
-          return;
-        }
-        setProgress({ done: s.done, total: s.total });
-      }
+      await startPolling(r.job_id);
     } catch (e: any) {
       setError(e.message || "Error");
       setState("error");
@@ -222,6 +248,8 @@ function DockingReady() {
               referenceRmsd={referenceRmsd}
               pdbSource={pdbSource}
               jobId={completedJobId}
+              onReproduce={reproduce}
+              reproducing={reproducing}
             />
           </>
         )}
@@ -240,6 +268,8 @@ function DockResultsTable({
   referenceRmsd,
   pdbSource,
   jobId,
+  onReproduce,
+  reproducing,
 }: {
   results: DockResultRow[];
   caveat: string | null;
@@ -250,6 +280,8 @@ function DockResultsTable({
   referenceRmsd?: number | null;
   pdbSource?: string | null;
   jobId?: string | null;
+  onReproduce?: () => void;
+  reproducing?: boolean;
 }) {
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
@@ -336,7 +368,12 @@ function DockResultsTable({
         </table>
       </div>
       {jobId && (
-        <div className="border-t border-line px-5 py-2.5 text-right">
+        <div className="flex items-center justify-end gap-4 border-t border-line px-5 py-2.5">
+          {onReproduce && (
+            <button type="button" className="btn-link" onClick={onReproduce} disabled={reproducing}>
+              {reproducing ? "Reproducing…" : "Reproduce this analysis"}
+            </button>
+          )}
           <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
             Download full experiment package (.zip)
           </a>

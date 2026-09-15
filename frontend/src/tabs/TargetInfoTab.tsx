@@ -89,7 +89,7 @@ export function TargetInfoTab() {
                 <ValidationPanel details={[dockDetail]} />
               </div>
             )}
-            {enrichStats && <EnrichmentStatsPanel stats={enrichStats} />}
+            {enrichStats && <EnrichmentStatsPanel stats={enrichStats} targetId={targetId} />}
             {!!plots.length && (
               <>
                 <div className="px-5 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wide text-brand-700">QSAR validation plots</div>

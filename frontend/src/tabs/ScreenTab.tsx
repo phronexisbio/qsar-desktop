@@ -59,6 +59,55 @@ export function ScreenTab() {
   const geneOnly = isGeneOnly(targetId);
   const dockDetail = dockingStatus?.target_details?.find((d: any) => d.target_id === targetId) ?? null;
 
+  /** Shared by a normal gene-only-docking submit and A6's "Reproduce this
+      analysis" — both just need a job id + the caveat/advanced context to
+      poll to completion the same way. */
+  const pollDock = async (jobId: string, caveat: string | null, advBody: AdvancedDockingBody | null, tId: string) => {
+    setFlow({ kind: "dock-poll", done: 0, total: 0, caveat, jobId });
+    while (true) {
+      await api.sleep(2000);
+      const s = await api.pollRetry(() => api.dockingJob(jobId));
+      if (s.status === "done" || s.status === "cancelled") {
+        setFlow({
+          kind: "dock-done",
+          results: s.results,
+          receptorPdbPath: s.receptor_pdb_path || null,
+          targetId: tId,
+          advanced: advBody,
+          caveat,
+          cancelled: s.status === "cancelled",
+          jobId,
+          validated: s.validated ?? null,
+          referenceRmsd: s.reference_rmsd ?? null,
+          pdbSource: s.pdb_source ?? null,
+        });
+        return;
+      }
+      if (s.status === "error") throw new Error(s.error || "failed");
+      setFlow({ kind: "dock-poll", done: s.done, total: s.total, caveat, jobId });
+    }
+  };
+
+  /** Same, for the QSAR+docking Screen pipeline's own job/poll shape. */
+  const pollScreen = async (jobId: string, tId: string, advBody: AdvancedDockingBody | null) => {
+    setFlow({ kind: "steps", step: 0, note: "Submitting…", jobId });
+    while (true) {
+      const s = await api.pollRetry(() => api.screenJob(jobId));
+      if (s.status === "error") throw new Error(s.error || "Screen failed.");
+      if (s.status === "cancelled") {
+        setFlow({ kind: "cancelled" });
+        return;
+      }
+      if (s.status === "done" && s.result) {
+        setFlow({ kind: "screen-done", result: s.result, jobId, targetId: tId, advanced: advBody });
+        return;
+      }
+      const note = s.step === 6 && s.total ? `Docking ${s.done || 0}/${s.total}…` : s.step_label || "Working…";
+      setFlow({ kind: "steps", step: s.step || 0, note, jobId });
+      await api.sleep(900);
+    }
+  };
+
   const run = async () => {
     try {
       const smiles = await mol.resolve();
@@ -79,47 +128,25 @@ export function ScreenTab() {
         }
         setFlow({ kind: "dock-submit" });
         const r = await api.submitDocking(targetId, smiles, advBody, plantSource);
-        setFlow({ kind: "dock-poll", done: 0, total: r.total, caveat: r.caveat || null, jobId: r.job_id });
-        while (true) {
-          await api.sleep(2000);
-          const s = await api.pollRetry(() => api.dockingJob(r.job_id));
-          if (s.status === "done" || s.status === "cancelled") {
-            setFlow({
-              kind: "dock-done",
-              results: s.results,
-              receptorPdbPath: s.receptor_pdb_path || null,
-              targetId,
-              advanced: advBody,
-              caveat: r.caveat || null,
-              cancelled: s.status === "cancelled",
-              jobId: r.job_id,
-              validated: r.validated ?? null,
-              referenceRmsd: r.reference_rmsd ?? null,
-              pdbSource: r.pdb_source ?? null,
-            });
-            return;
-          }
-          if (s.status === "error") throw new Error(s.error || "failed");
-          setFlow({ kind: "dock-poll", done: s.done, total: s.total, caveat: r.caveat || null, jobId: r.job_id });
-        }
+        await pollDock(r.job_id, r.caveat || null, advBody, targetId);
+        return;
       }
 
       const r = await api.submitScreen(targetId, smiles, advBody, plantSource);
-      setFlow({ kind: "steps", step: 0, note: "Submitting…", jobId: r.job_id });
-      while (true) {
-        const s = await api.pollRetry(() => api.screenJob(r.job_id));
-        if (s.status === "error") throw new Error(s.error || "Screen failed.");
-        if (s.status === "cancelled") {
-          setFlow({ kind: "cancelled" });
-          return;
-        }
-        if (s.status === "done" && s.result) {
-          setFlow({ kind: "screen-done", result: s.result, jobId: r.job_id, targetId, advanced: advBody });
-          return;
-        }
-        const note = s.step === 6 && s.total ? `Docking ${s.done || 0}/${s.total}…` : s.step_label || "Working…";
-        setFlow({ kind: "steps", step: s.step || 0, note, jobId: r.job_id });
-        await api.sleep(900);
+      await pollScreen(r.job_id, targetId, advBody);
+    } catch (e: any) {
+      setFlow({ kind: "error", message: e.message || "Error" });
+    }
+  };
+
+  const reproduce = async () => {
+    try {
+      if (flow.kind === "dock-done") {
+        const r = await api.reproduceDocking(flow.jobId!);
+        await pollDock(r.job_id, r.caveat || null, flow.advanced, flow.targetId);
+      } else if (flow.kind === "screen-done") {
+        const r = await api.reproduceScreen(flow.jobId);
+        await pollScreen(r.job_id, flow.targetId, flow.advanced);
       }
     } catch (e: any) {
       setFlow({ kind: "error", message: e.message || "Error" });
@@ -184,7 +211,7 @@ export function ScreenTab() {
         )}
         {flow.kind === "error" && <ErrorBox message={flow.message} />}
         {flow.kind === "cancelled" && <Notice>Stopped by user before it finished — no partial result to show for a mid-pipeline stop.</Notice>}
-        {flow.kind === "screen-done" && <ScreenResults d={flow.result} jobId={flow.jobId} advanced={flow.advanced} />}
+        {flow.kind === "screen-done" && <ScreenResults d={flow.result} jobId={flow.jobId} advanced={flow.advanced} onReproduce={reproduce} />}
         {flow.kind === "dock-done" && (
           <>
             {flow.cancelled && <Notice>Stopped — showing the {flow.results.length} compound(s) that finished docking before the stop request.</Notice>}
@@ -198,6 +225,7 @@ export function ScreenTab() {
               referenceRmsd={flow.referenceRmsd}
               pdbSource={flow.pdbSource}
               jobId={flow.jobId}
+              onReproduce={reproduce}
             />
           </>
         )}
@@ -237,7 +265,26 @@ function StepsView({ step, note, onStop }: { step: number; note: string; onStop:
   );
 }
 
-function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string; advanced: AdvancedDockingBody | null }) {
+function ScreenResults({
+  d,
+  jobId,
+  advanced,
+  onReproduce,
+}: {
+  d: ScreenResult;
+  jobId: string;
+  advanced: AdvancedDockingBody | null;
+  onReproduce: () => void;
+}) {
+  const [reproducing, setReproducing] = useState(false);
+  const doReproduce = async () => {
+    setReproducing(true);
+    try {
+      await onReproduce();
+    } finally {
+      setReproducing(false);
+    }
+  };
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
     setOpenRows((s) => {
@@ -338,7 +385,17 @@ function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string;
                           <td colSpan={20} className="border-b border-surface2 bg-surface2/40 p-0">
                             <div className="px-5 py-3.5">
                               {canView && (
-                                <img src={`data:image/png;base64,${r.docking!.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+                                <>
+                                  <img src={`data:image/png;base64,${r.docking!.interaction_png}`} className="max-w-full rounded-lg border border-line bg-white" />
+                                  <div className="mt-1.5 flex gap-2.5 text-[11.5px]">
+                                    <a className="btn-link" href={api.apiUrl(`/api/screen/job/${jobId}/interaction_diagram?smiles=${encodeURIComponent(r.smiles)}&fmt=svg`)} download>
+                                      Download SVG
+                                    </a>
+                                    <a className="btn-link" href={api.apiUrl(`/api/screen/job/${jobId}/interaction_diagram?smiles=${encodeURIComponent(r.smiles)}&fmt=tiff`)} download>
+                                      Download TIFF
+                                    </a>
+                                  </div>
+                                </>
                               )}
                               {r.docking!.pose_pdb && (
                                 <div className="mt-2">
@@ -364,6 +421,9 @@ function ScreenResults({ d, jobId, advanced }: { d: ScreenResult; jobId: string;
           <div className="flex items-center justify-between border-t border-line px-5 py-2.5">
             <span className="text-[12.5px] text-inkmut">{d.skipped.length ? `Skipped: ${d.skipped.join(", ")}` : ""}</span>
             <div className="flex gap-3">
+              <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing}>
+                {reproducing ? "Reproducing…" : "Reproduce this analysis"}
+              </button>
               <a className="btn-link" href={api.screenExportUrl(jobId)} download>
                 Download CSV
               </a>
@@ -394,6 +454,7 @@ function GeneOnlyDockResults({
   referenceRmsd,
   pdbSource,
   jobId,
+  onReproduce,
 }: {
   results: DockResultRow[];
   receptorPdbPath: string | null;
@@ -401,17 +462,28 @@ function GeneOnlyDockResults({
   advanced: AdvancedDockingBody | null;
   caveat: string | null;
   jobId?: string;
+  onReproduce?: () => void;
   validated?: boolean | null;
   referenceRmsd?: number | null;
   pdbSource?: string | null;
 }) {
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
+  const [reproducing, setReproducing] = useState(false);
   const toggle = (i: number) =>
     setOpenRows((s) => {
       const n = new Set(s);
       n.has(i) ? n.delete(i) : n.add(i);
       return n;
     });
+  const doReproduce = async () => {
+    if (!onReproduce) return;
+    setReproducing(true);
+    try {
+      await onReproduce();
+    } finally {
+      setReproducing(false);
+    }
+  };
   return (
     <div>
       <RedockingBanner validated={validated} referenceRmsd={referenceRmsd} pdbSource={pdbSource} />
@@ -463,7 +535,12 @@ function GeneOnlyDockResults({
         </table>
       </div>
       {jobId && (
-        <div className="border-t border-line px-5 py-2.5 text-right">
+        <div className="flex items-center justify-end gap-4 border-t border-line px-5 py-2.5">
+          {onReproduce && (
+            <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing}>
+              {reproducing ? "Reproducing…" : "Reproduce this analysis"}
+            </button>
+          )}
           <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
             Download full experiment package (.zip)
           </a>

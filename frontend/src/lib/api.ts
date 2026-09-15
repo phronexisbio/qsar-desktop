@@ -120,6 +120,8 @@ export const structureCandidates = (targetId: string) =>
       : `/api/targets/${targetId}/structure_candidates`
   );
 export const enrichmentStats = (targetId: string) => api<EnrichmentStats>(`/api/targets/${targetId}/enrichment_stats`);
+export const enrichmentPlotUrl = (targetId: string, plotName: string, fmt: "svg" | "tiff") =>
+  apiUrl(`/api/targets/${encodeURIComponent(targetId)}/enrichment_stats/plot/${plotName}?fmt=${fmt}`);
 export const boxFromResidues = (body: {
   target_id: string;
   residues: { chain: string; resnum: number }[];
@@ -180,6 +182,14 @@ export const cancelScreen = (jid: string) => api<{ ok: boolean }>(`/api/screen/c
 export const screenExportUrl = (jid: string) => apiUrl(`/api/screen/job/${jid}/export.csv`);
 export const screenExportPackageUrl = (jid: string) => apiUrl(`/api/screen/job/${jid}/export_package`);
 export const dockingExportPackageUrl = (jid: string) => apiUrl(`/api/docking/job/${jid}/export_package`);
+
+// ---------- A6: "Reproduce this analysis" ----------
+export const reproduceDocking = (jid: string) =>
+  api<{ job_id: string; total: number; caveat?: string | null; validated?: boolean | null; reference_rmsd?: number | null; pdb_source?: string | null }>(
+    `/api/docking/job/${jid}/reproduce`,
+    { method: "POST" }
+  );
+export const reproduceScreen = (jid: string) => api<{ job_id: string }>(`/api/screen/job/${jid}/reproduce`, { method: "POST" });
 
 // ---------- on-demand downloads ----------
 export const downloadsStatus = () => api<DownloadsStatus>("/api/downloads/status");

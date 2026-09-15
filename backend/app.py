@@ -468,6 +468,48 @@ def enrichment_stats(target_id: str):
     return stats
 
 
+@app.get("/api/targets/{target_id}/enrichment_stats/export")
+def enrichment_stats_export(target_id: str, fmt: str = "json"):
+    """B13 — the raw validation NUMBERS (ROC-AUC, PR-AUC, BEDROC, Z-score,
+       enrichment factors, distribution stats, run settings) as a
+       standalone downloadable file — distinct from the plot-image export
+       above (SVG/TIFF/PNG of the four charts) and from the full one-click
+       experiment zip, which only ever bundled a per-compound results.csv,
+       never this target-level validation summary."""
+    fmt = fmt.lower()
+    if fmt not in ("json", "csv"):
+        raise HTTPException(400, "unsupported format — use 'json' or 'csv'")
+    if DOCK_AVAIL is None:
+        raise HTTPException(503, "Docking package not available")
+    from docking.enrichment_stats import compute_stats
+    stats = compute_stats(target_id, include_plots=False)
+    if stats is None:
+        raise HTTPException(404, f"no saved enrichment reference for '{target_id}'")
+    from fastapi.responses import StreamingResponse
+    if fmt == "json":
+        import json as _json
+        data = _json.dumps(stats, indent=2, default=str).encode()
+        return StreamingResponse(iter([data]), media_type="application/json",
+                                 headers={"Content-Disposition": f'attachment; filename="{target_id}_enrichment_stats.json"'})
+    import csv, io
+
+    def _flatten(d, prefix=""):
+        for k, v in d.items():
+            key = f"{prefix}{k}"
+            if isinstance(v, dict):
+                yield from _flatten(v, f"{key}.")
+            else:
+                yield key, v
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["metric", "value"])
+    for k, v in _flatten(stats):
+        w.writerow([k, v])
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{target_id}_enrichment_stats.csv"'})
+
+
 _PLOT_MEDIA_TYPES = {"svg": "image/svg+xml", "png": "image/png", "tif": "image/tiff", "tiff": "image/tiff", "pdf": "application/pdf"}
 
 
@@ -1046,6 +1088,36 @@ def docking_interaction_diagram(jid: str, smiles: str, fmt: str = "svg"):
     return _interaction_diagram_response(smiles, dock_row.get("interactions"), dock_row.get("interaction_source"), fmt)
 
 
+def _failure_log_csv(jid, rows):
+    import csv, io
+    from fastapi.responses import StreamingResponse
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["smiles", "status", "category", "reason", "suggested_action"])
+    n = 0
+    for r in rows:
+        if r.get("status") == "ok":
+            continue
+        n += 1
+        w.writerow([r.get("smiles"), r.get("status"), r.get("category"), r.get("reason") or r.get("error"), r.get("suggested_action")])
+    if n == 0:
+        w.writerow(["(no failed compounds in this job)", "", "", "", ""])
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="failure_log_{jid}.csv"'})
+
+
+@app.get("/api/docking/job/{jid}/failure_log")
+def docking_failure_log(jid: str):
+    """B13 — standalone failure log for a completed batch, without
+       downloading the whole experiment package: every non-'ok' compound
+       with its failure category/reason/suggested_action (docking/
+       failure_diagnostics.py) as one small CSV."""
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    return _failure_log_csv(jid, job.get("results") or [])
+
+
 class FreshDecoyBody(BaseModel):
     target_id: str
     smiles: str
@@ -1296,6 +1368,24 @@ def screen_interaction_diagram(jid: str, smiles: str, fmt: str = "svg"):
         raise HTTPException(404, "no docking result for this SMILES in this job")
     d = row["docking"]
     return _interaction_diagram_response(smiles, d.get("interactions"), None, fmt)
+
+
+@app.get("/api/screen/job/{jid}/failure_log")
+def screen_failure_log(jid: str):
+    """Same as docking_failure_log, adapted for the Screen pipeline's
+       shortlist shape (each row's docking result nests under
+       row['docking'])."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    flat = []
+    for row in (job["result"].get("shortlist") or []):
+        if row.get("docking") is None:
+            continue   # docking never ran for this compound (QSAR-only) — not a failure to log
+        d = dict(row["docking"])
+        d["smiles"] = row.get("smiles")
+        flat.append(d)
+    return _failure_log_csv(jid, flat)
 
 
 @app.get("/api/screen/job/{jid}/export.csv")

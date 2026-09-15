@@ -16,7 +16,17 @@ export function EnrichmentStatsPanel({ stats, targetId }: { stats: EnrichmentSta
   const rs = stats.run_settings;
   return (
     <div className="px-5 pb-5">
-      <div className="pb-2 pt-2 text-[10.5px] font-bold uppercase tracking-wide text-brand-700">Decoy validation statistics</div>
+      <div className="flex items-center justify-between pb-2 pt-2">
+        <span className="text-[10.5px] font-bold uppercase tracking-wide text-brand-700">Decoy validation statistics</span>
+        <span className="flex gap-2.5 text-[11.5px]">
+          <a className="btn-link" href={api.enrichmentStatsExportUrl(targetId, "json")} download>
+            Export stats (JSON)
+          </a>
+          <a className="btn-link" href={api.enrichmentStatsExportUrl(targetId, "csv")} download>
+            Export stats (CSV)
+          </a>
+        </span>
+      </div>
 
       {rs && (
         <div className="mb-3 rounded-lg border border-line bg-surface2/40 px-3 py-2.5 text-[12px] text-inkmut">

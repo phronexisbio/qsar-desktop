@@ -428,9 +428,14 @@ function ScreenResults({
                 Download CSV
               </a>
               {d.docking_used && (
-                <a className="btn-link" href={api.screenExportPackageUrl(jobId)} download>
-                  Download full experiment package (.zip)
-                </a>
+                <>
+                  <a className="btn-link" href={api.screenFailureLogUrl(jobId)} download>
+                    Download failure log (.csv)
+                  </a>
+                  <a className="btn-link" href={api.screenExportPackageUrl(jobId)} download>
+                    Download full experiment package (.zip)
+                  </a>
+                </>
               )}
             </div>
           </div>
@@ -541,6 +546,9 @@ function GeneOnlyDockResults({
               {reproducing ? "Reproducing…" : "Reproduce this analysis"}
             </button>
           )}
+          <a className="btn-link" href={api.dockingFailureLogUrl(jobId)} download>
+            Download failure log (.csv)
+          </a>
           <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
             Download full experiment package (.zip)
           </a>

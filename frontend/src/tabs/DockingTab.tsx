@@ -374,6 +374,9 @@ function DockResultsTable({
               {reproducing ? "Reproducing…" : "Reproduce this analysis"}
             </button>
           )}
+          <a className="btn-link" href={api.dockingFailureLogUrl(jobId)} download>
+            Download failure log (.csv)
+          </a>
           <a className="btn-link" href={api.dockingExportPackageUrl(jobId)} download>
             Download full experiment package (.zip)
           </a>

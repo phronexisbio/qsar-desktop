@@ -28,6 +28,27 @@ COMMON_ADDITIVES = {"HOH", "WAT", "SO4", "PO4", "GOL", "EDO", "PEG", "ACT", "NA"
                     "CL", "K", "MG", "ZN", "CA", "MN", "DMS", "TRS", "FMT", "IOD"}
 
 
+def _count_pdb_atoms(path):
+    """Cheap line-scan atom count (ATOM+HETATM) — used only to report real
+       before/after facts in build_receptor()'s prep_report, not for
+       anything that needs Bio.PDB's actual structure model."""
+    n = 0
+    with open(path) as f:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")):
+                n += 1
+    return n
+
+
+def _count_pdbqt_atoms(path):
+    n = 0
+    with open(path) as f:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")):
+                n += 1
+    return n
+
+
 # ---------- step 1: parse + extract reference ligand ----------
 def extract_reference_ligand(pdb_path, ref_resname=None, chain=None):
     """Return (ref_ligand_coords Nx3, ref_resname, ref_atoms) for the co-crystallised
@@ -327,17 +348,39 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
 
     tdir = os.path.join(out_dir, target_id)
     os.makedirs(tdir, exist_ok=True)
+    # B13 — real, non-fabricated before/after facts for each stage, surfaced
+    # to the caller as `prep_report` below: every number here comes from an
+    # actual line-count of the file that stage just produced, not a label
+    # restating what the stage does (which is all `progress()`'s callback
+    # gives the UI live — this is the same pipeline's DURABLE record of it).
+    prep_report = []
+    n_input_atoms = _count_pdb_atoms(pdb_path)
 
     _p("Extracting reference ligand")
     ref_coords, ref_name, n_ref = extract_reference_ligand(pdb_path, ref_resname, chain)
     center, box_size = grid_box_from_ligand(ref_coords, padding=padding)
+    prep_report.append({"label": "Extract reference ligand", "detail": f"{ref_name}: {n_ref} atom(s)"})
 
     _p("Stripping to protein-only (removing waters/heteroatoms)")
     prot = strip_to_protein(pdb_path, os.path.join(tdir, "protein_raw.pdb"), chain=chain)
+    n_stripped_atoms = _count_pdb_atoms(prot)
+    prep_report.append({"label": "Strip to protein-only", "detail":
+                        f"{n_input_atoms} → {n_stripped_atoms} atoms "
+                        f"({n_input_atoms - n_stripped_atoms} water(s)/heteroatom(s) removed)"})
+
     _p("Repairing (PDBFixer: missing atoms/residues, hydrogenation)")
     clean = repair_receptor(prot, os.path.join(tdir, "receptor_clean.pdb"))
+    n_repaired_atoms = _count_pdb_atoms(clean)
+    prep_report.append({"label": "Repair (PDBFixer)", "detail":
+                        f"{n_stripped_atoms} → {n_repaired_atoms} atoms "
+                        f"({n_repaired_atoms - n_stripped_atoms} missing atom(s)/hydrogen(s) added)"})
+
     _p("Building PDBQT (Meeko: atom typing, charges)")
     rec_pdbqt = receptor_to_pdbqt(clean, os.path.join(tdir, "receptor.pdbqt"))
+    n_pdbqt_atoms = _count_pdbqt_atoms(rec_pdbqt)
+    prep_report.append({"label": "Build PDBQT (Meeko)", "detail":
+                        f"{n_pdbqt_atoms} atom(s) typed with AutoDock atom types + partial charges "
+                        "(receptor kept rigid for docking — no torsions here)"})
 
     _p("Computing binding site (pocket residues, grid box)")
     try:
@@ -348,8 +391,13 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
         blind_center, blind_box_size = box_from_receptor(clean)
     except Exception:
         blind_center, blind_box_size = None, None   # non-fatal — blind mode just won't be offered for this structure
+    prep_report.append({"label": "Compute binding site", "detail":
+                        f"{len(binding_site_residues)} pocket residue(s) within 5.0 Å of the reference ligand; "
+                        f"box center ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f}), "
+                        f"size {box_size[0]:.1f} × {box_size[1]:.1f} × {box_size[2]:.1f} Å"})
 
     return {
+        "prep_report": prep_report,
         "target_id": target_id, "name": name or target_id,
         "pdb_source": os.path.basename(pdb_path), "reference_ligand_resname": ref_name,
         "chain": chain,                # persisted so a later revert/repair (see batch_validate.py's

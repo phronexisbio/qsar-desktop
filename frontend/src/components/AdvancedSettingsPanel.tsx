@@ -1,7 +1,29 @@
 import { useState } from "react";
 import type { AdvancedDockingState } from "../lib/useAdvancedDocking";
+import type { ReceptorProfile } from "../lib/types";
 import { ReceptorBeforeAfter } from "./ReceptorBeforeAfter";
 import { RedockOverlay } from "./RedockOverlay";
+
+/** B13 — client-side download of the already-fetched prep_report data
+    (same pattern as the enrichment plots' "Download PNG": no new
+    endpoint needed, the facts are already in the profile response). */
+function downloadPrepReport(profile: ReceptorProfile) {
+  const lines = [
+    `Receptor preparation report`,
+    `Target: ${profile.target_id ?? "?"}`,
+    `Structure: ${profile.pdb_source ?? "?"}`,
+    profile.validated != null ? `Redocking validated: ${profile.validated ? "yes" : "no"}${profile.reference_rmsd != null ? ` (RMSD ${profile.reference_rmsd} Å)` : ""}` : null,
+    "",
+    ...(profile.prep_report || []).map((s, i) => `${i + 1}. ${s.label}\n   ${s.detail}`),
+  ].filter((l): l is string => l != null);
+  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `prep_report_${(profile.target_id || "receptor").replace(/[^A-Za-z0-9]+/g, "_")}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 const STATUS_CLS: Record<string, string> = {
   muted: "text-inkmut",
@@ -105,6 +127,11 @@ export function AdvancedSettingsPanel({
                   </div>
                 )}
               </>
+            )}
+            {!!adv.customProfile?.prep_report?.length && (
+              <button type="button" className="btn-link mt-1.5" onClick={() => downloadPrepReport(adv.customProfile!)}>
+                Download prep report
+              </button>
             )}
             {adv.customProfile?.redocked_pose_pdb && adv.customProfile?.crystal_ligand_path && (
               <>

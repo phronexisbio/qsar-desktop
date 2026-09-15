@@ -143,6 +143,11 @@ export interface ReceptorProfile {
   binding_site_residues?: PocketResidue[];
   blind_center?: [number, number, number];
   blind_box_size?: [number, number, number];
+  /** B13 — real before/after facts for each receptor-prep stage (atom
+      counts, pocket residues found, box dimensions) — only set for a
+      manual Advanced Settings structure pick, same as raw_pdb_path,
+      since the registry's pre-built defaults don't carry this record. */
+  prep_report?: { label: string; detail: string }[];
   [k: string]: any;
 }
 

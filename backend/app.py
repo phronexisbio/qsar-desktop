@@ -787,9 +787,13 @@ class DockBody(BaseModel):
     target_id: str
     smiles: List[str]
     advanced: Optional[AdvancedDocking] = None
+    # A1 — optional project-intake metadata (plant/organism this batch of
+    # compounds came from), carried through to run_metadata/the export
+    # package so every result stays traceable back to its natural source.
+    plant_source: Optional[str] = None
 
 
-def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles):
+def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles, plant_source=None):
     """A6 — reproducibility snapshot for one docking/screen run: everything
        needed to redo it later (or write a Methods section from it) that
        isn't already implicit in the code itself. Captured at SUBMIT time
@@ -800,6 +804,7 @@ def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles):
     from versions import snapshot as version_snapshot
     return {
         "target_id": target_id,
+        "plant_source": plant_source,  # A1 — optional, traces this batch back to its natural source
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "n_compounds_submitted": len(smiles),
         "docking_mode": "blind" if profile.get("site_source") == "blind_whole_protein" else "site_specific",
@@ -827,7 +832,7 @@ def docking_submit(body: DockBody):
     if not smiles:
         raise HTTPException(400, "No SMILES provided.")
     jid = uuid.uuid4().hex[:12]
-    run_metadata = _build_run_metadata(body.target_id, profile, engine, rescorer, n_poses, smiles)
+    run_metadata = _build_run_metadata(body.target_id, profile, engine, rescorer, n_poses, smiles, plant_source=body.plant_source)
     # captured now (not read back off job["profile"], which _run_docking_job
     # nulls out once done) — the 3D pose viewer needs the receptor that was
     # ACTUALLY docked against, which for an Advanced Settings custom_profile
@@ -1011,6 +1016,7 @@ class ScreenBody(BaseModel):
     target_id: str
     smiles: List[str]
     advanced: Optional[AdvancedDocking] = None
+    plant_source: Optional[str] = None
 
 
 @app.post("/api/screen/submit")
@@ -1024,11 +1030,11 @@ def screen_submit(body: ScreenBody):
     jid = uuid.uuid4().hex[:12]
     _SCREEN_JOBS[jid] = {"status": "queued", "step": 0, "step_label": "Queued",
                          "done": None, "total": None, "result": None, "error": None}
-    _run_screen_job(jid, body.target_id, smiles, body.advanced.model_dump() if body.advanced else None)
+    _run_screen_job(jid, body.target_id, smiles, body.advanced.model_dump() if body.advanced else None, plant_source=body.plant_source)
     return {"job_id": jid}
 
 
-def _run_screen_job(jid, target_id, smiles, advanced=None):
+def _run_screen_job(jid, target_id, smiles, advanced=None, plant_source=None):
     import threading
 
     def on_progress(step, label, done=None, total=None):
@@ -1047,6 +1053,7 @@ def _run_screen_job(jid, target_id, smiles, advanced=None):
             from versions import snapshot as version_snapshot
             job["run_metadata"] = {
                 "target_id": target_id,
+                "plant_source": plant_source,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "n_compounds_submitted": len(smiles),
                 "docking_mode": result.get("docking_mode"),
@@ -1134,3 +1141,58 @@ def screen_export_csv(jid: str):
                              headers={"Content-Disposition": f'attachment; filename="screen_{jid}.csv"'})
 
 
+
+
+# ============================================================
+#  A3 — Natural-product similarity search (similarity.py)
+# ============================================================
+import similarity as SIM
+
+
+class SimilaritySearchBody(BaseModel):
+    smiles: str
+    threshold: float = Field(default=0.4, ge=0.0, le=1.0)
+    top_n: int = Field(default=50, ge=1, le=200)
+
+
+@app.get("/api/similarity/status")
+def similarity_status():
+    """Whether the COCONUT-derived similarity index has been downloaded
+       yet — this is a single shared resource (not per-target), so it's
+       its own small download flow rather than downloads.py's per-target
+       manifest-driven one."""
+    return {"available": SIM.available(), "download_base_url": SIM.DOWNLOAD_BASE_URL}
+
+
+@app.post("/api/similarity/download")
+def similarity_download_start():
+    if SIM.available():
+        return {"job_id": None, "already_installed": True}
+    return {"job_id": SIM.start_download()}
+
+
+@app.get("/api/similarity/download/progress/{job_id}")
+def similarity_download_progress(job_id: str):
+    p = SIM.download_progress(job_id)
+    if p is None:
+        raise HTTPException(404, "unknown job")
+    return p
+
+
+@app.post("/api/similarity/download/cancel/{job_id}")
+def similarity_download_cancel(job_id: str):
+    if not SIM.cancel_download(job_id):
+        raise HTTPException(404, "unknown job")
+    return {"ok": True}
+
+
+@app.post("/api/similarity/search")
+def similarity_search(body: SimilaritySearchBody):
+    """Morgan/ECFP4 Tanimoto similarity + Murcko scaffold matching + MCS
+       (for the top hits) against the COCONUT natural-product index."""
+    try:
+        return SIM.search(body.smiles, threshold=body.threshold, top_n=body.top_n)
+    except FileNotFoundError:
+        raise HTTPException(503, "Similarity index not downloaded yet — see the Similarity Search tab.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))

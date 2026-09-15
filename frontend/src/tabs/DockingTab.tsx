@@ -67,6 +67,7 @@ function DockingReady() {
   const adv = useAdvancedDocking(targetId);
   const dockDetail = dockingStatus?.target_details?.find((d: any) => d.target_id === targetId) ?? null;
   const [smiles, setSmiles] = useState("");
+  const [plantSource, setPlantSource] = useState("");
   const [state, setState] = useState<"idle" | "submitting" | "polling" | "error" | "done">("idle");
   const [error, setError] = useState("");
   const [caveat, setCaveat] = useState<string | null>(null);
@@ -117,7 +118,7 @@ function DockingReady() {
     setCancelled(false);
     setSubmittedAdvanced(advBody);
     try {
-      const r = await api.submitDocking(targetId, smilesList, advBody);
+      const r = await api.submitDocking(targetId, smilesList, advBody, plantSource);
       setCaveat(r.caveat || null);
       setValidated(r.validated ?? null);
       setReferenceRmsd(r.reference_rmsd ?? null);
@@ -172,6 +173,16 @@ function DockingReady() {
           SMILES (one per line)
         </label>
         <textarea className="field-input min-h-[100px] resize-y font-mono text-[12.5px]" value={smiles} onChange={(e) => setSmiles(e.target.value)} />
+        <label className="field-label" style={{ marginTop: 12 }}>
+          Plant source (optional)
+        </label>
+        <input
+          className="field-input"
+          placeholder="e.g. Curcuma longa"
+          value={plantSource}
+          onChange={(e) => setPlantSource(e.target.value)}
+        />
+        <div className="field-hint">Traces this batch back to its natural source in the exported metadata.</div>
         <AdvancedSettingsPanel key={targetId} adv={adv} openByDefault={!!targetId} validated={dockDetail?.validated ?? null} />
         <button className="btn-primary mt-[18px]" onClick={run} disabled={state === "submitting" || state === "polling" || adv.preparingStructure}>
           {adv.preparingStructure ? "Preparing structure…" : "Dock compounds"}

@@ -14,6 +14,7 @@ import type {
   EnrichmentRunSettings,
   EnrichmentStats,
   PredictResponse,
+  SimilarityResult,
   ReceptorProfile,
   RecommendationResponse,
   ScreenJobStatus,
@@ -137,10 +138,10 @@ export const customReceptorJob = (jid: string) =>
   api<{ status: string; step?: string | null; profile?: ReceptorProfile; error?: string }>(`/api/docking/receptor/custom/job/${jid}`);
 
 // ---------- docking submit / poll ----------
-export const submitDocking = (target_id: string, smiles: string[], advanced: AdvancedDockingBody | null) =>
+export const submitDocking = (target_id: string, smiles: string[], advanced: AdvancedDockingBody | null, plant_source?: string | null) =>
   api<{ job_id: string; total: number; caveat?: string | null; validated?: boolean | null; reference_rmsd?: number | null; pdb_source?: string | null }>(
     "/api/docking/submit",
-    json({ target_id, smiles, advanced })
+    json({ target_id, smiles, advanced, plant_source: plant_source || null })
   );
 export const dockingJob = (jid: string) => api<DockJobStatus>(`/api/docking/job/${jid}`);
 export const cancelDocking = (jid: string) => api<{ ok: boolean }>(`/api/docking/cancel/${jid}`, { method: "POST" });
@@ -169,8 +170,8 @@ export const freshDecoyJob = (jid: string) =>
   }>(`/api/docking/enrichment/fresh/job/${jid}`);
 
 // ---------- screen pipeline ----------
-export const submitScreen = (target_id: string, smiles: string[], advanced: AdvancedDockingBody | null) =>
-  api<{ job_id: string }>("/api/screen/submit", json({ target_id, smiles, advanced }));
+export const submitScreen = (target_id: string, smiles: string[], advanced: AdvancedDockingBody | null, plant_source?: string | null) =>
+  api<{ job_id: string }>("/api/screen/submit", json({ target_id, smiles, advanced, plant_source: plant_source || null }));
 export const screenJob = (jid: string) => api<ScreenJobStatus>(`/api/screen/job/${jid}`);
 export const cancelScreen = (jid: string) => api<{ ok: boolean }>(`/api/screen/cancel/${jid}`, { method: "POST" });
 export const screenExportUrl = (jid: string) => apiUrl(`/api/screen/job/${jid}/export.csv`);
@@ -207,5 +208,14 @@ export async function ensureDownloaded(
     if (p.state === "error") throw new ApiError(p.error || `Download failed for ${targetId} (${kind}).`);
   }
 }
+
+// ---------- A3: natural-product similarity search ----------
+export const similarityStatus = () => api<{ available: boolean; download_base_url: string }>("/api/similarity/status");
+export const similarityDownloadStart = () => api<{ job_id: string | null; already_installed?: boolean }>("/api/similarity/download", { method: "POST" });
+export const similarityDownloadProgress = (jid: string) =>
+  api<{ state: string; done: number; total: number; error?: string | null }>(`/api/similarity/download/progress/${jid}`);
+export const similarityDownloadCancel = (jid: string) => api<{ ok: boolean }>(`/api/similarity/download/cancel/${jid}`, { method: "POST" });
+export const similaritySearch = (smiles: string, threshold = 0.4, top_n = 50) =>
+  api<SimilarityResult>("/api/similarity/search", json({ smiles, threshold, top_n }));
 
 export { ApiError };

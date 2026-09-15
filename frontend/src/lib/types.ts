@@ -395,3 +395,22 @@ export interface DownloadJobStatus {
   total: number;
   error?: string | null;
 }
+
+export interface SimilarityHit {
+  id: string;
+  smiles: string;
+  name?: string | null;
+  tanimoto: number;
+  scaffold_match: boolean;
+  molecular_weight?: number | null;
+  chemical_super_class?: string | null;
+  np_classifier_class?: string | null;
+  mcs_smarts?: string;
+  mcs_n_atoms?: number;
+}
+export interface SimilarityResult {
+  query_scaffold?: string | null;
+  n_indexed: number;
+  n_results: number;
+  results: SimilarityHit[];
+}

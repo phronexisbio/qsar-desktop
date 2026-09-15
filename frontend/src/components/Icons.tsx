@@ -39,6 +39,14 @@ export function CompareIcon(p: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function SimilarityIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...p}>
+      <circle cx="9" cy="12" r="6" />
+      <circle cx="15" cy="12" r="6" />
+    </svg>
+  );
+}
 export function DockingIcon(p: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...p}>

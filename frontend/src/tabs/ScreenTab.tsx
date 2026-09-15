@@ -54,6 +54,7 @@ export function ScreenTab() {
   const [targetId, setTargetId] = useState("");
   const adv = useAdvancedDocking(targetId);
   const mol = useMoleculeInput();
+  const [plantSource, setPlantSource] = useState("");
   const [flow, setFlow] = useState<FlowState>({ kind: "idle" });
   const geneOnly = isGeneOnly(targetId);
   const dockDetail = dockingStatus?.target_details?.find((d: any) => d.target_id === targetId) ?? null;
@@ -77,7 +78,7 @@ export function ScreenTab() {
           throw new Error("Pick a structure in Advanced Settings first — there's no automatic default for this target yet.");
         }
         setFlow({ kind: "dock-submit" });
-        const r = await api.submitDocking(targetId, smiles, advBody);
+        const r = await api.submitDocking(targetId, smiles, advBody, plantSource);
         setFlow({ kind: "dock-poll", done: 0, total: r.total, caveat: r.caveat || null, jobId: r.job_id });
         while (true) {
           await api.sleep(2000);
@@ -103,7 +104,7 @@ export function ScreenTab() {
         }
       }
 
-      const r = await api.submitScreen(targetId, smiles, advBody);
+      const r = await api.submitScreen(targetId, smiles, advBody, plantSource);
       setFlow({ kind: "steps", step: 0, note: "Submitting…", jobId: r.job_id });
       while (true) {
         const s = await api.pollRetry(() => api.screenJob(r.job_id));
@@ -146,6 +147,16 @@ export function ScreenTab() {
         <div className="mt-3">
           <MoleculeInputPanel state={mol} />
         </div>
+        <label className="field-label" style={{ marginTop: 12 }}>
+          Plant source (optional)
+        </label>
+        <input
+          className="field-input"
+          placeholder="e.g. Curcuma longa"
+          value={plantSource}
+          onChange={(e) => setPlantSource(e.target.value)}
+        />
+        <div className="field-hint">Traces this batch back to its natural source in the exported metadata.</div>
         <AdvancedSettingsPanel key={targetId} adv={adv} openByDefault={!!targetId} validated={dockDetail?.validated ?? null} />
         <button
           className="btn-primary mt-[18px]"

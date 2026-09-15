@@ -97,7 +97,17 @@ function DockingReady() {
     }
     const advBody = adv.getAdvanced();
     if (isGeneOnly(targetId) && !advBody?.custom_profile && !adv.site) {
-      setError('Pick a structure in Advanced Settings first — there\'s no automatic default for this target yet. Try "Find best validated structure automatically" there, or pick one manually.');
+      setError("Pick a structure in Advanced Settings first — there's no automatic default for this target yet.");
+      setState("error");
+      return;
+    }
+    if (adv.dockingMode !== "blind" && !adv.siteConfirmed) {
+      setError('Choose how to define the binding site first — "Automatic" or "Manual" — in the Docking mode section above.');
+      setState("error");
+      return;
+    }
+    if (adv.dockingMode !== "blind" && adv.siteMethod === "manual" && !adv.boxOverride) {
+      setError('Pick at least one residue to build the binding-site box — "View binding site in 3D" above.');
       setState("error");
       return;
     }

@@ -63,10 +63,16 @@ export function ScreenTab() {
       if (!targetId) throw new Error("Pick a target.");
 
       const advBody = adv.getAdvanced();
+      if (adv.dockingMode !== "blind" && !adv.siteConfirmed) {
+        throw new Error('Choose how to define the binding site first — "Automatic" or "Manual" — in the Docking mode section above.');
+      }
+      if (adv.dockingMode !== "blind" && adv.siteMethod === "manual" && !adv.boxOverride) {
+        throw new Error('Pick at least one residue to build the binding-site box — "View binding site in 3D" above.');
+      }
 
       if (geneOnly) {
         if (!advBody?.custom_profile && !adv.site) {
-          throw new Error('Pick a structure in Advanced Settings first — there\'s no automatic default for this target yet. Try "Find best validated structure automatically" there, or pick one manually.');
+          throw new Error("Pick a structure in Advanced Settings first — there's no automatic default for this target yet.");
         }
         setFlow({ kind: "dock-submit" });
         const r = await api.submitDocking(targetId, smiles, advBody);

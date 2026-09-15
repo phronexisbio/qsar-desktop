@@ -90,11 +90,8 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /** Blue (hydrophilic) -> white -> orange (hydrophobic), same convention
-    PyMOL/Chimera use for this coloring — unrecognised residues (ligand
-    atoms, waters, etc.) render neutral white rather than crashing. */
-function hydrophobicityColor(resn: string | undefined): string {
-  const v = KD_SCALE[(resn || "").toUpperCase()];
-  if (v === undefined) return "#e5e7eb";
+    PyMOL/Chimera use for this coloring. */
+function hydrophobicityColorForValue(v: number): string {
   const t = (v + 4.5) / 9; // -4.5..4.5 -> 0..1
   const lo = { r: 0x2b, g: 0x6c, b: 0xb0 }; // blue
   const mid = { r: 0xff, g: 0xff, b: 0xff }; // white
@@ -105,6 +102,31 @@ function hydrophobicityColor(resn: string | undefined): string {
   const bl = Math.round(lerp(a.b, b.b, u));
   return `#${[r, g, bl].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
 }
+
+// A pre-sampled color ramp for 3Dmol's addSurface `map: {prop, gradient}`
+// coloring path (see applyProteinStyle's surfaceHydrophobicity case) —
+// deliberately NOT a `colorfunc` closure. 3Dmol computes surface geometry
+// across several Web Workers; a colorfunc can't cross that boundary (JS
+// closures aren't structured-cloneable), so it runs on the MAIN THREAD once
+// per vertex as each worker posts geometry back — thousands of synchronous
+// calls for a full receptor, and worse, clearSurfaces() only deletes the
+// rendered geometry, not the still-running workers, so switching styles
+// while one is mid-flight just queues more blocking work behind the click
+// instead of cancelling it. `map`/`gradient` is plain, clonable data (a
+// property name + numeric min/max + a color array), so the worker resolves
+// vertex colors entirely on its own — nothing runs on the main thread per
+// vertex, and there's nothing left to cancel.
+//
+// 3Dmol's CustomLinear gradient buckets N colors into N equal-width
+// segments interpolating colors[i]->colors[i+1], with the LAST bucket
+// always flat (no i+1 to interpolate toward) — not a naive N-1-segment
+// gradient. Oversampling the smooth blue-white-orange curve at many stops
+// keeps that flat final bucket negligibly small instead of visibly
+// clipping the top of the range to solid orange.
+const HYDROPHOBICITY_GRADIENT_STOPS = 20;
+const HYDROPHOBICITY_GRADIENT_COLORS: string[] = Array.from({ length: HYDROPHOBICITY_GRADIENT_STOPS }, (_, i) =>
+  hydrophobicityColorForValue(-4.5 + (9 * i) / (HYDROPHOBICITY_GRADIENT_STOPS - 1))
+);
 
 /** Removes every surface this viewer is currently tracking — call before
     applying a non-surface style, and before adding a new surface (3Dmol
@@ -150,7 +172,23 @@ export function applyProteinStyle(viewer: any, sel: any, style: ProteinStyle, on
     }
     case "surfaceHydrophobicity": {
       viewer.setStyle(sel, { cartoon: { color: "lightgrey" } });
-      const id = viewer.addSurface("VDW", { opacity: 0.9, colorfunc: (atom: any) => hydrophobicityColor(atom?.resn) }, sel);
+      // Stamp each atom's KD hydrophobicity as a plain numeric property
+      // (0 = neutral, for ligand atoms/waters/anything unrecognised) so
+      // addSurface's `map` coloring can read it worker-side — see the
+      // HYDROPHOBICITY_GRADIENT_COLORS comment above for why this replaces
+      // a colorfunc closure instead of just wrapping one.
+      for (const atom of viewer.selectedAtoms(sel)) {
+        if (!atom.properties) atom.properties = {};
+        atom.properties.hydrophob = KD_SCALE[(atom.resn || "").toUpperCase()] ?? 0;
+      }
+      const id = viewer.addSurface(
+        "VDW",
+        {
+          opacity: 0.9,
+          map: { prop: "hydrophob", gradient: { gradient: "linear", min: -4.5, max: 4.5, colors: HYDROPHOBICITY_GRADIENT_COLORS } },
+        },
+        sel
+      );
       onSurfaceIds?.([id]);
       break;
     }

@@ -47,6 +47,17 @@ export function useAdvancedDocking(targetId: string) {
   const [structureStatus, setStructureStatus] = useState<{ kind: "muted" | "ok" | "warn" | "err"; text: string } | null>(null);
   const [preparingStructure, setPreparingStructure] = useState(false);
 
+  // The binding-site box is computed (loadBindingSite still auto-fires, so
+  // the structure/residue evidence is there to REVIEW) the instant a target
+  // is picked, but it must not become the ACTIVE search box until the user
+  // has explicitly said how they want the site defined — effectiveBox()
+  // below returns nothing until siteConfirmed is true. "Automatic" accepts
+  // the box centered on the target's real, experimentally co-crystallized
+  // reference ligand (already computed); "Manual" starts the residue
+  // selection empty and builds the box from what the user picks.
+  const [siteConfirmed, setSiteConfirmed] = useState(false);
+  const [siteMethod, setSiteMethod] = useState<"automatic" | "manual" | null>(null);
+
 
   const residueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -137,6 +148,8 @@ export function useAdvancedDocking(targetId: string) {
     setExhaustiveness("");
     setNPoses("");
     setUseGnina(true);
+    setSiteConfirmed(false);
+    setSiteMethod(null);
     if (!targetId) {
       setSite(null);
       setCandidates(null);
@@ -146,6 +159,24 @@ export function useAdvancedDocking(targetId: string) {
     loadStructureCandidates(targetId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
+
+  /** Accept the already-computed automatic site (ligand-centered box +
+      pocket residues) as the active one for this run. */
+  const confirmAutomaticSite = useCallback(() => {
+    setSiteMethod("automatic");
+    setSiteConfirmed(true);
+  }, []);
+
+  /** Start from an empty pocket — the user builds the box up by picking
+      residues themselves (toggleResidue already drives boxOverride via
+      applyResidueSelection; this just clears whatever the automatic
+      proposal had pre-populated so it doesn't look like a head start). */
+  const useManualSite = useCallback(() => {
+    setSiteMethod("manual");
+    setSiteConfirmed(true);
+    setSelected(new Set());
+    setBoxOverride(null);
+  }, []);
 
   const applyBindingSiteFromProfile = useCallback((profile: ReceptorProfile) => {
     const s: SiteState = {
@@ -160,6 +191,13 @@ export function useAdvancedDocking(targetId: string) {
     setSite(s);
     setSelected(new Set(s.residues.map(residueKey)));
     setBoxOverride(null);
+    // Picking a structure is itself the deliberate action here — the
+    // resulting site (centered on THAT structure's own co-crystallized
+    // ligand) is the same "automatic" methodology, just for a manually-
+    // chosen PDB entry. Manual residue-picking is still available
+    // afterward via useManualSite()/toggleResidue if the user wants it.
+    setSiteMethod("automatic");
+    setSiteConfirmed(true);
   }, []);
 
   const pickStructure = useCallback(
@@ -211,17 +249,29 @@ export function useAdvancedDocking(targetId: string) {
     setSelected(new Set(site ? site.residues.map(residueKey) : []));
     setBoxOverride(null);
     setStructureStatus(null);
+    setSiteMethod("automatic");
+    setSiteConfirmed(true);
     if (targetId) loadBindingSite(targetId);
   }, [targetId, site, loadBindingSite]);
 
-  /** Whole-protein box in blind mode; else the box override (drag / residue
-      selection) if present; else the automatic ligand-centered box. */
+  /** Whole-protein box in blind mode (that toggle IS the explicit choice,
+      no separate site-method confirmation needed — there's no pocket to
+      define); else nothing until the user has confirmed a site method
+      (confirmAutomaticSite/useManualSite/picking a structure) — a grid box
+      must never be silently active just because a target got selected;
+      else the box override (drag / residue selection) if present; else
+      the confirmed-automatic ligand-centered box. */
   const effectiveBox = useCallback((): [[number, number, number] | undefined, [number, number, number] | undefined] => {
     if (!site) return [undefined, undefined];
     if (dockingMode === "blind") return [site.blind_center || site.center, site.blind_box_size || site.box_size];
+    if (!siteConfirmed) return [undefined, undefined];
     if (boxOverride) return [boxOverride.center, boxOverride.size];
+    // Manual mode with nothing picked yet has no box at all — falling
+    // through to the automatic site's box here would silently hand back
+    // exactly the box manual mode exists to let the user avoid.
+    if (siteMethod === "manual") return [undefined, undefined];
     return [site.center, site.box_size];
-  }, [site, dockingMode, boxOverride]);
+  }, [site, dockingMode, boxOverride, siteConfirmed, siteMethod]);
 
   const getAdvanced = useCallback((): AdvancedDockingBody | null => {
     const adv: AdvancedDockingBody = {};
@@ -266,6 +316,10 @@ export function useAdvancedDocking(targetId: string) {
     effectiveBox,
     getAdvanced,
     hasAutomaticDefault: !!site,
+    siteConfirmed,
+    siteMethod,
+    confirmAutomaticSite,
+    useManualSite,
   };
 }
 

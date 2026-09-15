@@ -71,10 +71,16 @@ function PredictResults({ d }: { d: PredictResponse }) {
       <ResultHeader>
         <ResultName>{d.target.name}</ResultName>
         <Stat label="Model">{d.model || "—"}</Stat>
-        <Stat label="Test R²">{m.test_r2 ?? "—"}</Stat>
-        <Stat label="Test RMSE">{m.test_rmse ?? "—"}</Stat>
-        <Stat label="Tropsha">{m.tropsha_pass === true ? "pass" : m.tropsha_pass === false ? "fail" : "—"}</Stat>
-        <Stat label="In-domain">
+        <Stat label="Test R²" tip="Coefficient of determination on this model's held-out test set — closer to 1 means it explains more of the potency variance. Dimensionless (0–1).">
+          {m.test_r2 ?? "—"}
+        </Stat>
+        <Stat label="Test RMSE" tip="Root-mean-square error on the held-out test set, in pIC50 units — lower is more accurate.">
+          {m.test_rmse ?? "—"}
+        </Stat>
+        <Stat label="Tropsha" tip="Whether this model passes Tropsha's applicability-domain validation criteria — a standard QSAR model-quality check.">
+          {m.tropsha_pass === true ? "pass" : m.tropsha_pass === false ? "fail" : "—"}
+        </Stat>
+        <Stat label="In-domain" tip="Compounds RDKit could parse and that fell within this model's applicability domain, out of everything submitted.">
           {c.in_domain}/{c.submitted}
         </Stat>
       </ResultHeader>
@@ -88,11 +94,23 @@ function PredictResults({ d }: { d: PredictResponse }) {
                   {[
                     { h: "#", w: "w-10" },
                     { h: "Compound" },
-                    { h: "Predicted pIC50", w: "w-28" },
-                    { h: "AD z", w: "w-16" },
+                    {
+                      h: "Predicted pIC50",
+                      w: "w-28",
+                      tip: "Predicted −log10(IC50 in M) — higher means more potent. From this target's shipped Chemprop+AutoGluon QSAR model.",
+                    },
+                    {
+                      h: "AD z",
+                      w: "w-16",
+                      tip: "Applicability-domain z-score: how many standard deviations this compound's descriptors sit from the training set's mean. Near 0 = well within the training chemistry; larger magnitude = less trustworthy.",
+                    },
                     { h: "Confidence", w: "w-40" },
                   ].map((c) => (
-                    <th key={c.h} className={`sticky top-0 z-10 border-b border-line bg-surface2 px-2.5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide text-inkmut ${c.w || ""}`}>
+                    <th
+                      key={c.h}
+                      title={c.tip}
+                      className={`sticky top-0 z-10 border-b border-line bg-surface2 px-2.5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide text-inkmut ${c.tip ? "cursor-help" : ""} ${c.w || ""}`}
+                    >
                       {c.h}
                     </th>
                   ))}

@@ -72,7 +72,10 @@ export interface AdmetProfile {
     available: boolean;
     note?: string;
     flags?: any[];
-    groups?: Record<string, { label: string; display: string; tone: string; percentile?: number | null }[]>;
+    groups?: Record<
+      string,
+      { name: string; label: string; task: "class" | "reg"; unit: string; display: string; tone: string; percentile?: number | null }[]
+    >;
     /** Every column ADMET-AI actually returned for this compound (all
         physicochemical descriptors, task predictions, and
         *_drugbank_approved_percentile fields) — groups/flags above are
@@ -125,6 +128,18 @@ export interface ReceptorProfile {
   reference_rmsd?: number | null;
   redock_note?: string;
   pdb_source?: string;
+  /** Original, unmodified structure as fetched from RCSB — before
+      strip/repair. Lets the UI show a before/after comparison against
+      receptor_pdb (the cleaned one). Only set for a manual Advanced
+      Settings structure pick, not the registry's build-time default. */
+  raw_pdb_path?: string;
+  /** The redocked pose (Vina's best pose for the known reference ligand)
+      and the real experimental/crystal pose it was compared against for
+      reference_rmsd — together these let the UI show an overlay instead
+      of just the RMSD number. Only set when a ligand_resname was given
+      (redocking validation actually ran). */
+  redocked_pose_pdb?: string | null;
+  crystal_ligand_path?: string | null;
   binding_site_residues?: PocketResidue[];
   blind_center?: [number, number, number];
   blind_box_size?: [number, number, number];
@@ -176,6 +191,7 @@ export interface DockResultRow {
   confidence?: "high" | "medium" | "low" | "none";
   vina_score?: number | null;
   n_valid?: number;
+  pose_self_consistency?: number;
   gnina?: { cnn_score?: number | null; cnn_affinity?: number | null; gnina_affinity?: number | null };
   interaction_png?: string | null;
   interaction_source?: string;

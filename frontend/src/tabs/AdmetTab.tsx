@@ -144,14 +144,20 @@ function AdmetResults({ d }: { d: AdmetResponse }) {
               {[
                 { h: "", w: "w-6" },
                 { h: "Compound" },
-                { h: "MW", w: "w-16" },
-                { h: "LogP", w: "w-16" },
-                { h: "QED", w: "w-16" },
-                { h: "Lipinski", w: "w-20" },
-                { h: "Alerts", w: "w-16" },
-                ...(learnedOn ? [{ h: "Tox flags", w: "w-20" }] : []),
+                { h: "MW (Da)", w: "w-16", tip: "Molecular weight of the standardized structure (RDKit Descriptors.MolWt)." },
+                { h: "LogP", w: "w-16", tip: "Calculated octanol-water partition coefficient (RDKit Crippen.MolLogP) — higher = more lipophilic. Dimensionless." },
+                { h: "QED (0–1)", w: "w-16", tip: "Quantitative Estimate of Drug-likeness (RDKit QED.qed), combining several properties into one score — closer to 1 is more drug-like." },
+                { h: "Lipinski", w: "w-20", tip: "Count of Lipinski Rule-of-Five violations (MW > 500 Da, LogP > 5, H-bond donors > 5, H-bond acceptors > 10)." },
+                { h: "Alerts", w: "w-16", tip: "Count of matched structural-alert substructure patterns (PAINS / Brenk / NIH filters) — informational, never used to exclude a compound." },
+                ...(learnedOn
+                  ? [{ h: "Tox flags", w: "w-20", tip: "Count of ADMET-AI learned endpoints flagged as a concern for this compound (see the expanded row for which ones)." }]
+                  : []),
               ].map((c, i) => (
-                <th key={i} className={`sticky top-0 z-10 border-b border-line bg-surface2 px-2.5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide text-inkmut ${c.w || ""}`}>
+                <th
+                  key={i}
+                  title={c.tip}
+                  className={`sticky top-0 z-10 border-b border-line bg-surface2 px-2.5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide text-inkmut ${c.tip ? "cursor-help decoration-dotted underline decoration-1 underline-offset-2" : ""} ${c.w || ""}`}
+                >
                   {c.h}
                 </th>
               ))}
@@ -223,16 +229,23 @@ function epDetail(groups: NonNullable<AdmetProfile["learned"]>["groups"]) {
       {GROUP_ORDER.filter((g) => groups[g]).map((g) => (
         <div key={g} className="mb-3">
           <h5 className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-brand-700">{g}</h5>
-          {groups[g].map((e, j) => (
-            <span
-              key={j}
-              className={`mb-1.5 mr-1.5 inline-flex items-center gap-1.5 rounded-lg border-l-[3px] border border-line bg-surface px-2.5 py-1.5 text-[12.5px] ${TONE_BORDER[e.tone] || "border-l-slateout"}`}
-            >
-              <span>{e.label}</span>
-              <span className="font-bold">{e.display}</span>
-              {e.percentile != null && <span className="text-[11px] text-inkmut">{e.percentile}%ile</span>}
-            </span>
-          ))}
+          {groups[g].map((e, j) => {
+            const tip =
+              e.task === "class"
+                ? `${e.label} — learned prediction from ADMET-AI (Chemprop), shown as the predicted probability of a positive/risk classification.`
+                : `${e.label} — learned prediction from ADMET-AI (Chemprop), reported in ${e.unit}.`;
+            return (
+              <span
+                key={j}
+                title={e.percentile != null ? `${tip} Percentile is this compound's rank among DrugBank-approved drugs on this endpoint.` : tip}
+                className={`mb-1.5 mr-1.5 inline-flex cursor-help items-center gap-1.5 rounded-lg border-l-[3px] border border-line bg-surface px-2.5 py-1.5 text-[12.5px] decoration-dotted underline-offset-4 hover:underline ${TONE_BORDER[e.tone] || "border-l-slateout"}`}
+              >
+                <span>{e.label}</span>
+                <span className="font-bold">{e.display}</span>
+                {e.percentile != null && <span className="text-[11px] text-inkmut">{e.percentile}%ile</span>}
+              </span>
+            );
+          })}
         </div>
       ))}
     </>

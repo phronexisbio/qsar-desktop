@@ -83,9 +83,9 @@ export function ResultHeader({ children }: { children: React.ReactNode }) {
 export function ResultName({ children }: { children: React.ReactNode }) {
   return <div className="font-display text-[16px] font-medium text-ink">{children}</div>;
 }
-export function Stat({ label, children }: { label: string; children: React.ReactNode }) {
+export function Stat({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
-    <div className="text-[12px] text-inkmut">
+    <div className={`text-[12px] text-inkmut ${tip ? "cursor-help" : ""}`} title={tip}>
       {label}
       <b className="block text-[15px] font-semibold text-ink">{children}</b>
     </div>

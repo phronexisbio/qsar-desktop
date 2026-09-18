@@ -19,6 +19,8 @@ import type {
   LiteratureResult,
   ResearchReportResponse,
   ReceptorProfile,
+  AlternateLigand,
+  AlternateLigandsResponse,
   RecommendationResponse,
   ScreenJobStatus,
   StructureCandidatesResponse,
@@ -194,6 +196,21 @@ export const reproduceDocking = (jid: string) =>
     { method: "POST" }
   );
 export const reproduceScreen = (jid: string) => api<{ job_id: string }>(`/api/screen/job/${jid}/reproduce`, { method: "POST" });
+
+// ---------- dock again with a different co-crystallized ligand ----------
+export const dockingAlternateLigands = (jid: string) => api<AlternateLigandsResponse>(`/api/docking/job/${jid}/alternate_ligands`);
+export const screenAlternateLigands = (jid: string) => api<AlternateLigandsResponse>(`/api/screen/job/${jid}/alternate_ligands`);
+const alternateLigandBuild = (kind: "docking" | "screen", jid: string, lig: AlternateLigand) =>
+  api<{ job_id: string }>(`/api/${kind}/job/${jid}/alternate_ligand/build`, json({ resname: lig.resname, chain: lig.chain, resnum: lig.resnum }));
+export const dockingAlternateLigandBuild = (jid: string, lig: AlternateLigand) => alternateLigandBuild("docking", jid, lig);
+export const screenAlternateLigandBuild = (jid: string, lig: AlternateLigand) => alternateLigandBuild("screen", jid, lig);
+const alternateLigandSubmit = (kind: "docking" | "screen", jid: string, profile: ReceptorProfile) =>
+  api<{ job_id: string; total?: number; caveat?: string | null; validated?: boolean | null; reference_rmsd?: number | null; pdb_source?: string | null }>(
+    `/api/${kind}/job/${jid}/alternate_ligand/submit`,
+    json({ profile })
+  );
+export const dockingAlternateLigandSubmit = (jid: string, profile: ReceptorProfile) => alternateLigandSubmit("docking", jid, profile);
+export const screenAlternateLigandSubmit = (jid: string, profile: ReceptorProfile) => alternateLigandSubmit("screen", jid, profile);
 
 // ---------- on-demand downloads ----------
 export const downloadsStatus = () => api<DownloadsStatus>("/api/downloads/status");

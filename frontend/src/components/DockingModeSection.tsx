@@ -5,7 +5,7 @@ import { BindingSiteModal } from "./BindingSiteModal";
 
 export function DockingModeSection({ adv, targetId }: { adv: AdvancedDockingState; targetId: string }) {
   const [modalOpen, setModalOpen] = useState(false);
-  const { site, dockingMode, setDockingMode, siteConfirmed, siteMethod, confirmAutomaticSite, useManualSite } = adv;
+  const { site, dockingMode, setDockingMode, siteConfirmed, siteMethod, confirmAutomaticSite, useManualSite, selected, effectiveBox } = adv;
 
   let summary: React.ReactNode = <span className="text-inkmut">No binding-site evidence for this target.</span>;
   let showBtn = false;
@@ -28,17 +28,17 @@ export function DockingModeSection({ adv, targetId }: { adv: AdvancedDockingStat
     } else if (!siteConfirmed) {
       needsChoice = true;
     } else {
-      const n = site.residues.length;
+      const [, activeSize] = effectiveBox();
       summary =
         siteMethod === "manual" ? (
           <>
-            Binding site: <b>{n}</b> residue(s) picked manually · box{" "}
-            {site.box_size?.map((v) => v.toFixed(1)).join(" × ") || "not yet sized — pick residues below"} Å
+            Binding site: <b>{selected.size}</b> residue(s) picked manually (out of {site.allResidues.length} in the receptor) · box{" "}
+            {activeSize ? activeSize.map((v) => v.toFixed(1)).join(" × ") : "not yet sized — pick residues below"} Å
           </>
         ) : (
           <>
-            Binding site: <b>{n}</b> pocket residue(s) within 5 Å of the reference ligand (automatic) · box{" "}
-            {site.box_size?.map((v) => v.toFixed(1)).join(" × ")} Å
+            Binding site: <b>{site.residues.length}</b> pocket residue(s) within 5 Å of the reference ligand (automatic) · box{" "}
+            {activeSize ? activeSize.map((v) => v.toFixed(1)).join(" × ") : site.box_size?.map((v) => v.toFixed(1)).join(" × ")} Å
           </>
         );
       showBtn = true;

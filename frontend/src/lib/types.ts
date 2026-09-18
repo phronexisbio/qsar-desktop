@@ -141,6 +141,9 @@ export interface ReceptorProfile {
   redocked_pose_pdb?: string | null;
   crystal_ligand_path?: string | null;
   binding_site_residues?: PocketResidue[];
+  /** Full receptor residue list — see BindingSiteResponse's field of the
+      same name. */
+  all_residues?: PocketResidue[];
   blind_center?: [number, number, number];
   blind_box_size?: [number, number, number];
   /** B13 — real before/after facts for each receptor-prep stage (atom
@@ -148,7 +151,32 @@ export interface ReceptorProfile {
       manual Advanced Settings structure pick, same as raw_pdb_path,
       since the registry's pre-built defaults don't carry this record. */
   prep_report?: { label: string; detail: string }[];
+  /** Real wall-clock seconds per phase, so a slow "prepare structure" run
+      is diagnosable (network fetch vs. Vina redock vs. the offline build
+      itself) instead of one opaque timed-but-unbroken-down wait. */
+  timing?: {
+    fetch_pdb_seconds?: number;
+    build_seconds?: number;
+    fetch_ligand_smiles_seconds?: number;
+    vina_redock_seconds?: number;
+  };
   [k: string]: any;
+}
+
+/** One real co-crystallized ligand found in a job's raw PDB structure —
+    see backend/docking/receptor_prep.py's list_ligands(). */
+export interface AlternateLigand {
+  resname: string;
+  chain: string;
+  resnum: number;
+  n_atoms: number;
+  center: [number, number, number];
+}
+export interface AlternateLigandsResponse {
+  available: boolean;
+  note?: string;
+  current: AlternateLigand | null;
+  ligands: AlternateLigand[];
 }
 
 export interface DistStats {
@@ -197,6 +225,10 @@ export interface BindingSiteResponse {
   reference_ligand_resname?: string;
   pocket_residues: PocketResidue[];
   n_pocket_residues: number;
+  /** The FULL receptor residue list (every amino acid, not just the
+      auto-detected pocket neighborhood) — what a manual binding-site
+      picker selects from. */
+  all_residues?: PocketResidue[];
   has_reference_ligand_mol: boolean;
   blind_center?: [number, number, number];
   blind_box_size?: [number, number, number];

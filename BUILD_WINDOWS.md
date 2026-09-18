@@ -113,9 +113,9 @@ From the project root:
       --collect-all cuik_molmaker ^
       --collect-all openmm ^
       --collect-all pdbfixer ^
-      --hidden-import lightgbm ^
-      --hidden-import catboost ^
-      --hidden-import xgboost ^
+      --collect-all lightgbm ^
+      --collect-all catboost ^
+      --collect-all xgboost ^
       --hidden-import uvicorn ^
       desktop.py
 The .exe lands in `dist\PhytoScreen\PhytoScreen.exe` (onedir — not
@@ -231,7 +231,7 @@ download-on-demand system — `desktop.py` points `CURATED_DATA_DIR` at
 `FROZEN_ROOT` when frozen, same pattern as `DOCKING_REGISTRY`/
 `PANEL_RESULTS_CSV`.
 
-### Why `--hidden-import lightgbm/catboost/xgboost`
+### Why `--collect-all lightgbm/catboost/xgboost`, not `--hidden-import`
 AutoGluon's stacked ensembles are built from these base learners — the
 chosen model for several real targets in this repo is `LightGBMXT_BAG_L1`
 or a `CatBoost_BAG_*` child. AutoGluon `pickle.load()`s them lazily at
@@ -242,7 +242,32 @@ started fine" means every target works. (This bit development the first
 time around: the base venv install had `autogluon.tabular` but not
 `lightgbm`, and predictions crashed with `ModuleNotFoundError: No module
 named 'lightgbm'` the first time a LightGBM-based target was actually
-queried.)
+queried — fixed at the time by adding `--hidden-import lightgbm/catboost/
+xgboost`.)
+
+That fixed the Python *module* being importable, but not the whole
+story: `xgboost`'s Python package doesn't compute anything itself — it's
+a thin ctypes wrapper that `CDLL()`-loads a real compiled engine,
+`xgboost/lib/xgboost.dll`, resolved at RUNTIME via `os.path.exists()`
+probing a list of candidate paths (`xgboost/libpath.py`'s
+`find_lib_path()`). That file-existence check is invisible to
+PyInstaller's static import analysis the same way `cuik_molmaker`'s and
+openmm/pdbfixer's data files are (see those sections above) — a plain
+`--hidden-import xgboost` bundles every `.py` file, `import xgboost`
+succeeds, `TabularPredictor.load()` succeeds, and the app *starts* fine;
+it only breaks the moment a real prediction actually reaches an
+XGBoost-based ensemble member, as `XGBoostLibraryNotFound: Cannot find
+XGBoost Library in the candidate path` listing paths under
+`_internal\xgboost\lib\xgboost.dll` that were never copied in. LightGBM
+ships the identical architecture (`lib_lightgbm.dll`, loaded the same
+ctypes way) so it gets the same fix pre-emptively rather than waiting
+for it to surface as the next per-target screening crash; CatBoost's
+native code is a normal importable extension module (PyInstaller's
+binary-dependency analysis already follows real `import` statements), so
+`--hidden-import` likely already worked for it, but `--collect-all` is a
+strict superset — switching it too costs nothing and keeps all three
+base learners handled the same way instead of two different mechanisms
+for what's conceptually one family of problem.
 
 Notes / likely tweaks (validate on your machine):
 - PyInstaller sometimes needs extra `--collect-all`/`--hidden-import`

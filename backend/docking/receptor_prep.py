@@ -50,9 +50,15 @@ def _count_pdbqt_atoms(path):
 
 
 # ---------- step 1: parse + extract reference ligand ----------
-def extract_reference_ligand(pdb_path, ref_resname=None, chain=None):
+def extract_reference_ligand(pdb_path, ref_resname=None, chain=None, resnum=None):
     """Return (ref_ligand_coords Nx3, ref_resname, ref_atoms) for the co-crystallised
-       inhibitor. If ref_resname is None, pick the largest non-additive HETATM group."""
+       inhibitor. If ref_resname is None, pick the largest non-additive HETATM group.
+       resnum: only needed to disambiguate the rare case of two separate
+       copies of the SAME ligand resname within the SAME chain (distinct
+       chains already disambiguate on their own) — see list_ligands(),
+       which is what a caller picking a specific candidate from a
+       multi-ligand structure uses to get an exact (resname, chain,
+       resnum) triple in the first place."""
     from Bio.PDB import PDBParser
     s = PDBParser(QUIET=True).get_structure("x", pdb_path)
     candidates = {}
@@ -69,6 +75,8 @@ def extract_reference_ligand(pdb_path, ref_resname=None, chain=None):
                     continue
                 if ref_resname and name != ref_resname:
                     continue
+                if resnum is not None and res.id[1] != resnum:
+                    continue
                 coords = np.array([a.coord for a in res.get_atoms()], float)
                 key = (name, ch.id, res.id[1])
                 candidates[key] = coords
@@ -78,6 +86,94 @@ def extract_reference_ligand(pdb_path, ref_resname=None, chain=None):
     # largest heavy-atom group wins (deterministic)
     key = max(candidates, key=lambda k: len(candidates[k]))
     return candidates[key], key[0], candidates[key].shape[0]
+
+
+def list_ligands(pdb_path, min_heavy_atoms=5, max_peptide_gap=2, min_peptide_run=3):
+    """Every real (non-additive, non-covalent-modification) small-molecule
+       ligand co-crystallized in this raw structure — a real crystal
+       structure often has MULTIPLE distinct bound ligands (different
+       copies of the same inhibitor in separate chains, a genuinely
+       different molecule in a second site, or an unrelated fragment), and
+       extract_reference_ligand() above always silently picks just the
+       single LARGEST one as THE reference. This lists all of them so a
+       caller can offer 'redock centered on a different one' instead of
+       being stuck with that one automatic pick.
+
+       Three filters, each catching a different kind of non-ligand HETATM
+       group that a naive 'every hetero residue' scan would wrongly offer
+       as a selectable ligand:
+       1. select_receptor.py's ADDITIVE_BLACKLIST (buffers, ions,
+          cryoprotectants, glycosylation sugars, nucleotide-analog
+          cofactors — a superset of this module's own COMMON_ADDITIVES).
+       2. Bio.PDB's is_aa(..., standard=False): catches a single modified
+          amino acid embedded mid-polypeptide-chain (e.g. SEP/TPO/CSO —
+          phosphorylated/oxidized residues, common on kinase activation
+          loops) — a real part of the PROTEIN, not a ligand to dock
+          against, even though PDB format marks it HETATM.
+       3. Contiguous-run grouping: some structures instead have a whole
+          PEPTIDE/macrocycle inhibitor built from non-standard (often
+          D-)amino acids Bio.PDB doesn't recognize via #2 (e.g. a p53-MDM2
+          D-peptide inhibitor, DAL/DCY/DGL/... one HETATM per residue,
+          resnum 1-17 in sequence) — is_aa() alone won't catch these, but
+          >=`min_peptide_run` hetero residues in the SAME chain with
+          resnums within `max_peptide_gap` of each other is a reliable
+          structural signature of 'this is one polymer chain, not several
+          independent small molecules,' regardless of what it's built
+          from. This pipeline docks single small molecules via Vina from a
+          SMILES string, so a whole peptide inhibitor is out of scope for
+          'pick an alternate ligand to redock against' either way — the
+          WHOLE run is excluded rather than offering its 17 residues as if
+          they were 17 different candidate pockets.
+
+       A small heavy-atom-count floor (default 5) additionally drops
+       leftover fragments/monatomic ions the blacklist doesn't name.
+       Distinct (resname, chain, resnum) copies of the SAME real ligand
+       (e.g. one per protein chain in a crystallographic dimer) are listed
+       separately — they sit in different pockets, so which one becomes
+       the reference genuinely matters for where the docking box lands."""
+    from Bio.PDB import PDBParser
+    from Bio.PDB.Polypeptide import is_aa
+    from scripts.select_receptor import ADDITIVE_BLACKLIST
+    s = PDBParser(QUIET=True).get_structure("x", pdb_path)
+
+    by_chain = {}
+    for model in s:
+        for ch in model:
+            for res in ch:
+                het = res.id[0].strip()
+                if not het:
+                    continue
+                name = res.resname.strip()
+                if name in ADDITIVE_BLACKLIST or name in COMMON_ADDITIVES:
+                    continue
+                if is_aa(name, standard=False):
+                    continue
+                coords = np.array([a.coord for a in res.get_atoms()], float)
+                if coords.shape[0] < min_heavy_atoms:
+                    continue
+                centroid = coords.mean(axis=0)
+                by_chain.setdefault(ch.id, []).append({
+                    "resname": name, "chain": ch.id, "resnum": res.id[1], "n_atoms": int(coords.shape[0]),
+                    "center": [round(float(v), 3) for v in centroid],
+                })
+        break   # first model only, same convention as extract_reference_ligand
+
+    out = []
+    for chain_id, residues in by_chain.items():
+        residues.sort(key=lambda r: r["resnum"])
+        run = [residues[0]]
+        for r in residues[1:]:
+            if r["resnum"] - run[-1]["resnum"] <= max_peptide_gap:
+                run.append(r)
+            else:
+                if len(run) < min_peptide_run:
+                    out.extend(run)
+                run = [r]
+        if len(run) < min_peptide_run:
+            out.extend(run)
+
+    out.sort(key=lambda r: -r["n_atoms"])
+    return out
 
 
 # ---------- step 2: strip to protein only ----------
@@ -288,6 +384,30 @@ def pocket_residues(clean_pdb_path, ref_coords, cutoff=5.0):
     return out
 
 
+def all_residues(clean_pdb_path):
+    """Every standard (non-heteroatom) residue in the receptor — the full
+       amino acid sequence, structured per-residue (chain/resnum/resname)
+       rather than a flat one-letter string, since that's what a manual
+       binding-site picker actually needs: something to list, highlight in
+       3D, and select. Unlike pocket_residues() this isn't centered on any
+       reference ligand at all, so it works even for a target with no
+       co-crystallized ligand and needs no ref_coords — 'manual' binding-
+       site definition means picking from the WHOLE protein, not just
+       refining the already automatically-detected pocket neighborhood."""
+    from Bio.PDB import PDBParser
+    s = PDBParser(QUIET=True).get_structure("x", clean_pdb_path)
+    out = []
+    for model in s:
+        for ch in model:
+            for res in ch:
+                if res.id[0] != " ":   # skip HETATM/water — same filter strip_to_protein() uses
+                    continue
+                out.append({"chain": ch.id, "resnum": res.id[1], "resname": res.resname.strip()})
+        break
+    out.sort(key=lambda r: (r["chain"], r["resnum"]))
+    return out
+
+
 def box_from_residues(clean_pdb_path, residues, padding=8.0, min_size=20.0):
     """center/box_size (grid_box_from_ligand's contract) from a user-picked
        residue subset — Advanced Settings' 'define a custom binding site
@@ -326,7 +446,7 @@ def box_from_receptor(clean_pdb_path, padding=4.0, min_size=20.0):
 
 
 # ---------- orchestration ----------
-def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
+def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None, resnum=None,
                    out_dir="docking_targets", padding=8.0, progress=None):
     """Runs the full strip -> repair -> PDBQT pipeline and returns a profile
        dict with ABSOLUTE file paths — no docking_registry.json I/O. Used by
@@ -336,6 +456,10 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
        per-request pick shouldn't silently overwrite the vetted default, and
        staying out of the shared registry file avoids racing a concurrent
        batch_validate.py run that owns writes to it).
+
+       resnum: passed straight through to extract_reference_ligand() — see
+       its docstring; only needed to disambiguate two same-resname copies
+       within the same chain, which list_ligands() callers can supply.
 
        progress, if given, is called with a short human-readable label
        before each real stage starts — the on-demand manual-structure path
@@ -357,7 +481,7 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
     n_input_atoms = _count_pdb_atoms(pdb_path)
 
     _p("Extracting reference ligand")
-    ref_coords, ref_name, n_ref = extract_reference_ligand(pdb_path, ref_resname, chain)
+    ref_coords, ref_name, n_ref = extract_reference_ligand(pdb_path, ref_resname, chain, resnum=resnum)
     center, box_size = grid_box_from_ligand(ref_coords, padding=padding)
     prep_report.append({"label": "Extract reference ligand", "detail": f"{ref_name}: {n_ref} atom(s)"})
 
@@ -388,16 +512,22 @@ def build_receptor(pdb_path, target_id, name=None, ref_resname=None, chain=None,
     except Exception:
         binding_site_residues = []   # non-fatal — box/docking still work without this display data
     try:
+        all_residues_list = all_residues(clean)
+    except Exception:
+        all_residues_list = []   # non-fatal — manual site-picking just won't have a full list to show
+    try:
         blind_center, blind_box_size = box_from_receptor(clean)
     except Exception:
         blind_center, blind_box_size = None, None   # non-fatal — blind mode just won't be offered for this structure
     prep_report.append({"label": "Compute binding site", "detail":
-                        f"{len(binding_site_residues)} pocket residue(s) within 5.0 Å of the reference ligand; "
+                        f"{len(binding_site_residues)} pocket residue(s) within 5.0 Å of the reference ligand "
+                        f"({len(all_residues_list)} total residue(s) in the receptor); "
                         f"box center ({center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f}), "
                         f"size {box_size[0]:.1f} × {box_size[1]:.1f} × {box_size[2]:.1f} Å"})
 
     return {
         "prep_report": prep_report,
+        "all_residues": all_residues_list,
         "target_id": target_id, "name": name or target_id,
         "pdb_source": os.path.basename(pdb_path), "reference_ligand_resname": ref_name,
         "chain": chain,                # persisted so a later revert/repair (see batch_validate.py's

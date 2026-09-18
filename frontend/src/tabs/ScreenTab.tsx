@@ -11,10 +11,10 @@ import { WhyThisButton } from "../components/RecommendationPanel";
 import { SectionIntro, ResultHeader, ResultName, Stat } from "../components/Shell";
 import { ConfidenceDot, Disclaimer, EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { LeafLattice } from "../components/Icons";
-import { DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner, ResearchReportButton } from "../components/DockingPieces";
+import { AlternateLigandButton, DockDetailPanel, DownloadComplexButton, EnrichmentChip, FreshDecoyButton, RedockingBanner, ResearchReportButton } from "../components/DockingPieces";
 import { ResidueFrequencyTable } from "../components/ResidueFrequencyTable";
 import { tierClass } from "../lib/tierClass";
-import type { AdvancedDockingBody, DockResultRow, ScreenResult } from "../lib/types";
+import type { AdvancedDockingBody, AlternateLigand, DockResultRow, ScreenResult } from "../lib/types";
 
 const SCREEN_STEPS = [
   "Parse & standardise SMILES",
@@ -153,6 +153,45 @@ export function ScreenTab() {
     }
   };
 
+  /** Polls a "build a receptor for THIS specific ligand" background job
+      (started by dockingAlternateLigandBuild/screenAlternateLigandBuild)
+      to completion — shared by both branches of redockAlternateLigand
+      below, since the build step itself doesn't care which tab/pipeline
+      the ORIGINAL job came from. */
+  const pollAlternateLigandBuild = async (buildJobId: string, lig: AlternateLigand) => {
+    while (true) {
+      await api.sleep(1500);
+      const j = await api.pollRetry(() => api.customReceptorJob(buildJobId));
+      if (j.status === "done") {
+        if (!j.profile) throw new Error(`Could not build a receptor for ${lig.resname} (chain ${lig.chain}).`);
+        return j.profile;
+      }
+      if (j.status === "error") throw new Error(j.error || `Could not build a receptor for ${lig.resname} (chain ${lig.chain}).`);
+    }
+  };
+
+  /** Same PDB structure, a DIFFERENT co-crystallized ligand as the
+      binding-site reference — every other setting (exhaustiveness, poses,
+      GNINA, compound list) held identical to the original run, same
+      contract as reproduce() above. */
+  const redockAlternateLigand = async (lig: AlternateLigand) => {
+    try {
+      if (flow.kind === "dock-done") {
+        const build = await api.dockingAlternateLigandBuild(flow.jobId!, lig);
+        const profile = await pollAlternateLigandBuild(build.job_id, lig);
+        const r = await api.dockingAlternateLigandSubmit(flow.jobId!, profile);
+        await pollDock(r.job_id, r.caveat || null, flow.advanced, flow.targetId);
+      } else if (flow.kind === "screen-done") {
+        const build = await api.screenAlternateLigandBuild(flow.jobId, lig);
+        const profile = await pollAlternateLigandBuild(build.job_id, lig);
+        const r = await api.screenAlternateLigandSubmit(flow.jobId, profile);
+        await pollScreen(r.job_id, flow.targetId, flow.advanced);
+      }
+    } catch (e: any) {
+      setFlow({ kind: "error", message: e.message || "Error" });
+    }
+  };
+
   const stop = async () => {
     try {
       if (flow.kind === "dock-poll") await api.cancelDocking(flow.jobId);
@@ -211,7 +250,9 @@ export function ScreenTab() {
         )}
         {flow.kind === "error" && <ErrorBox message={flow.message} />}
         {flow.kind === "cancelled" && <Notice>Stopped by user before it finished — no partial result to show for a mid-pipeline stop.</Notice>}
-        {flow.kind === "screen-done" && <ScreenResults d={flow.result} jobId={flow.jobId} advanced={flow.advanced} onReproduce={reproduce} />}
+        {flow.kind === "screen-done" && (
+          <ScreenResults d={flow.result} jobId={flow.jobId} advanced={flow.advanced} onReproduce={reproduce} onRedockAlternateLigand={redockAlternateLigand} />
+        )}
         {flow.kind === "dock-done" && (
           <>
             {flow.cancelled && <Notice>Stopped — showing the {flow.results.length} compound(s) that finished docking before the stop request.</Notice>}
@@ -226,6 +267,7 @@ export function ScreenTab() {
               pdbSource={flow.pdbSource}
               jobId={flow.jobId}
               onReproduce={reproduce}
+              onRedockAlternateLigand={redockAlternateLigand}
             />
           </>
         )}
@@ -270,11 +312,13 @@ function ScreenResults({
   jobId,
   advanced,
   onReproduce,
+  onRedockAlternateLigand,
 }: {
   d: ScreenResult;
   jobId: string;
   advanced: AdvancedDockingBody | null;
   onReproduce: () => void;
+  onRedockAlternateLigand: (lig: AlternateLigand) => Promise<void>;
 }) {
   const [reproducing, setReproducing] = useState(false);
   const doReproduce = async () => {
@@ -283,6 +327,15 @@ function ScreenResults({
       await onReproduce();
     } finally {
       setReproducing(false);
+    }
+  };
+  const [redockingAlt, setRedockingAlt] = useState(false);
+  const doRedockAlternateLigand = async (lig: AlternateLigand) => {
+    setRedockingAlt(true);
+    try {
+      await onRedockAlternateLigand(lig);
+    } finally {
+      setRedockingAlt(false);
     }
   };
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
@@ -418,12 +471,15 @@ function ScreenResults({
               </tbody>
             </table>
           </div>
-          <div className="flex items-center justify-between border-t border-line px-5 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-2.5">
             <span className="text-[12.5px] text-inkmut">{d.skipped.length ? `Skipped: ${d.skipped.join(", ")}` : ""}</span>
-            <div className="flex gap-3">
-              <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing}>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing || redockingAlt}>
                 {reproducing ? "Reproducing…" : "Reproduce this analysis"}
               </button>
+              {d.docking_used && (
+                <AlternateLigandButton jobId={jobId} kind="screen" onRedock={doRedockAlternateLigand} busy={redockingAlt || reproducing} />
+              )}
               <a className="btn-link" href={api.screenExportUrl(jobId)} download>
                 Download CSV
               </a>
@@ -460,6 +516,7 @@ function GeneOnlyDockResults({
   pdbSource,
   jobId,
   onReproduce,
+  onRedockAlternateLigand,
 }: {
   results: DockResultRow[];
   receptorPdbPath: string | null;
@@ -468,12 +525,14 @@ function GeneOnlyDockResults({
   caveat: string | null;
   jobId?: string;
   onReproduce?: () => void;
+  onRedockAlternateLigand?: (lig: AlternateLigand) => Promise<void>;
   validated?: boolean | null;
   referenceRmsd?: number | null;
   pdbSource?: string | null;
 }) {
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
   const [reproducing, setReproducing] = useState(false);
+  const [redockingAlt, setRedockingAlt] = useState(false);
   const toggle = (i: number) =>
     setOpenRows((s) => {
       const n = new Set(s);
@@ -487,6 +546,15 @@ function GeneOnlyDockResults({
       await onReproduce();
     } finally {
       setReproducing(false);
+    }
+  };
+  const doRedockAlternateLigand = async (lig: AlternateLigand) => {
+    if (!onRedockAlternateLigand) return;
+    setRedockingAlt(true);
+    try {
+      await onRedockAlternateLigand(lig);
+    } finally {
+      setRedockingAlt(false);
     }
   };
   return (
@@ -540,11 +608,14 @@ function GeneOnlyDockResults({
         </table>
       </div>
       {jobId && (
-        <div className="flex items-center justify-end gap-4 border-t border-line px-5 py-2.5">
+        <div className="flex flex-wrap items-center justify-end gap-4 border-t border-line px-5 py-2.5">
           {onReproduce && (
-            <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing}>
+            <button type="button" className="btn-link" onClick={doReproduce} disabled={reproducing || redockingAlt}>
               {reproducing ? "Reproducing…" : "Reproduce this analysis"}
             </button>
+          )}
+          {onRedockAlternateLigand && (
+            <AlternateLigandButton jobId={jobId} kind="docking" onRedock={doRedockAlternateLigand} busy={redockingAlt || reproducing} />
           )}
           <a className="btn-link" href={api.dockingFailureLogUrl(jobId)} download>
             Download failure log (.csv)

@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as api from "../lib/api";
 import { apiUrl } from "../lib/api";
 import { combinePdbText, fetchTextCached } from "../lib/mol3d";
-import type { AdvancedDockingBody, DockResultRow } from "../lib/types";
+import type { AdvancedDockingBody, AlternateLigand, DockResultRow } from "../lib/types";
 import { PoseViewer } from "./PoseViewer";
 import { Notice } from "./Feedback";
 
@@ -487,5 +487,98 @@ function ReportField({ label, value }: { label: string; value?: string | null | 
     <div className="mt-1.5 text-[12px] text-inkmut">
       <b className="text-ink">{label}:</b> {value}
     </div>
+  );
+}
+
+/** "Dock again with a different ligand": the same raw PDB structure a job
+    docked against often has MORE than one real co-crystallized ligand
+    (a second binding site, or one copy per chain in a crystallographic
+    dimer) — the pipeline always silently centers the box on just the
+    single largest one. This lets the user pick a different real ligand
+    from the same structure and redock, with every other setting
+    (exhaustiveness, poses, GNINA, compound list) held identical to the
+    original run — the actual "build a new receptor + resubmit" work is
+    owned by the caller (onRedock), since that has to replace the whole
+    results table the same way "Reproduce this analysis" does; this
+    component only owns fetching the candidate list and letting the user
+    pick one. */
+export function AlternateLigandButton({
+  jobId,
+  kind,
+  onRedock,
+  busy,
+}: {
+  jobId: string;
+  kind: "docking" | "screen";
+  onRedock: (lig: AlternateLigand) => void;
+  busy?: boolean;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "picking" | "none" | "error">("idle");
+  const [error, setError] = useState("");
+  const [data, setData] = useState<{ current: AlternateLigand | null; ligands: AlternateLigand[] } | null>(null);
+  const [picked, setPicked] = useState("");
+
+  const open = async () => {
+    setState("loading");
+    setError("");
+    try {
+      const d = kind === "docking" ? await api.dockingAlternateLigands(jobId) : await api.screenAlternateLigands(jobId);
+      if (!d.available || d.ligands.length < 2) {
+        setState("none");
+        return;
+      }
+      setData({ current: d.current, ligands: d.ligands });
+      setPicked("");
+      setState("picking");
+    } catch (e: any) {
+      setError(e.message || "Error");
+      setState("error");
+    }
+  };
+
+  const confirm = () => {
+    if (!data || !picked) return;
+    const lig = data.ligands.find((l) => `${l.chain}:${l.resnum}` === picked);
+    if (lig) onRedock(lig);
+    setState("idle");
+  };
+
+  if (state === "idle" || state === "error") {
+    return (
+      <span>
+        <button type="button" className="btn-link" onClick={open} disabled={busy}>
+          Dock again with a different ligand
+        </button>
+        {state === "error" && <div className="field-hint text-clay">{error}</div>}
+      </span>
+    );
+  }
+  if (state === "loading") return <span className="text-[12.5px] text-inkmut">Checking for other ligands in this structure…</span>;
+  if (state === "none") return <span className="text-[12.5px] text-inkmut">Only one real ligand found in this structure.</span>;
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <select className="field-input inline-block w-auto text-[12.5px]" value={picked} onChange={(e) => setPicked(e.target.value)}>
+        <option value="" disabled>
+          Pick a different ligand…
+        </option>
+        {data!.ligands.map((l) => {
+          const key = `${l.chain}:${l.resnum}`;
+          const isCurrent = !!data!.current && l.chain === data!.current.chain && l.resnum === data!.current.resnum;
+          return (
+            <option key={key} value={key} disabled={isCurrent}>
+              {l.resname} · chain {l.chain} · residue {l.resnum}
+              {isCurrent ? " (current)" : ""}
+            </option>
+          );
+        })}
+      </select>
+      <button type="button" className="btn-link" onClick={confirm} disabled={!picked || busy}>
+        {busy ? "Docking…" : "Dock"}
+      </button>
+      <button type="button" className="btn-link" onClick={() => setState("idle")} disabled={busy}>
+        Cancel
+      </button>
+    </span>
   );
 }

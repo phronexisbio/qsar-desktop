@@ -14,6 +14,12 @@ export interface SiteState {
   center?: [number, number, number];
   box_size?: [number, number, number];
   residues: PocketResidue[];
+  /** The full receptor residue list (every amino acid), for manual
+      binding-site selection — `residues` above stays the automatically-
+      detected pocket neighborhood only. Falls back to `residues` itself
+      when unavailable (an older cached profile, or a structure whose
+      cleaned receptor is no longer on disk). */
+  allResidues: PocketResidue[];
   blind_center?: [number, number, number];
   blind_box_size?: [number, number, number];
   receptorUrl: string | null;
@@ -129,6 +135,7 @@ export function useAdvancedDocking(targetId: string) {
         center: d.center,
         box_size: d.box_size,
         residues: d.pocket_residues || [],
+        allResidues: d.all_residues?.length ? d.all_residues : d.pocket_residues || [],
         blind_center: d.blind_center,
         blind_box_size: d.blind_box_size,
         receptorUrl: api.apiUrl(`/api/docking/receptor/${tid}`),
@@ -183,6 +190,7 @@ export function useAdvancedDocking(targetId: string) {
       center: profile.center,
       box_size: profile.box_size,
       residues: profile.binding_site_residues || [],
+      allResidues: profile.all_residues?.length ? profile.all_residues : profile.binding_site_residues || [],
       blind_center: profile.blind_center,
       blind_box_size: profile.blind_box_size,
       receptorUrl: api.apiUrl(`/api/docking/receptor_file?path=${encodeURIComponent(profile.receptor_pdb)}`),

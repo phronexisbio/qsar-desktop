@@ -36,8 +36,10 @@ export function BindingSiteModal({
   targetId: string;
   onClose: () => void;
 }) {
-  const { site, dockingMode, selected, toggleResidue, boxOverride, setBoxOverride, effectiveBox } = adv;
+  const { site, dockingMode, siteMethod, selected, toggleResidue, boxOverride, setBoxOverride, effectiveBox } = adv;
   const blind = dockingMode === "blind";
+  const manual = siteMethod === "manual";
+  const [residueFilter, setResidueFilter] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -139,7 +141,11 @@ export function BindingSiteModal({
       }
       const [center, size] = effectiveBox();
       if (center && size) drawBoxShapes(viewer, center, size);
-      if (resiList.length) viewer.zoomTo({ model: 0, resi: resiList });
+      // Manual mode zooms to the WHOLE protein, not just the automatically-
+      // detected pocket — biasing the camera toward that region would
+      // undercut the point of free selection (an allosteric site or any
+      // other region entirely should be just as visible/reachable).
+      if (!manual && resiList.length) viewer.zoomTo({ model: 0, resi: resiList });
       else viewer.zoomTo();
       viewer.render();
       if (cancelled) return;
@@ -260,8 +266,22 @@ export function BindingSiteModal({
     [effectiveBox, applyDrag]
   );
 
-  const residues = site?.residues || [];
+  // Manual mode picks from the WHOLE receptor's residues; automatic mode
+  // still only shows the pocket neighborhood (nothing to pick there — it's
+  // a summary of what the automatic box already used).
+  const residues = manual ? site?.allResidues || [] : site?.residues || [];
   const selectedCount = residues.filter((r) => selected.has(residueKey(r))).length;
+  const filteredResidues = residueFilter.trim()
+    ? residues.filter((r) => {
+        const q = residueFilter.trim().toLowerCase();
+        return (
+          r.resname.toLowerCase().includes(q) ||
+          String(r.resnum).includes(q) ||
+          r.chain.toLowerCase().includes(q) ||
+          `${r.chain}:${r.resnum}`.toLowerCase().includes(q)
+        );
+      })
+    : residues;
 
   return (
     <Modal
@@ -309,16 +329,29 @@ export function BindingSiteModal({
             )}
           </div>
           <label className="field-label">
-            Pocket residues {blind ? "(informational only in blind mode)" : "(uncheck to exclude from docking)"}
+            {manual
+              ? `All residues (${residues.length}) — pick any to build the box`
+              : `Pocket residues ${blind ? "(informational only in blind mode)" : "(uncheck to exclude from docking)"}`}
           </label>
+          {manual && residues.length > 15 && (
+            <input
+              className="field-input mb-1.5 text-[12.5px]"
+              placeholder="Filter by residue, number, or chain (e.g. LEU, 145, A:145)"
+              value={residueFilter}
+              onChange={(e) => setResidueFilter(e.target.value)}
+            />
+          )}
           <div className="max-h-[220px] overflow-y-auto rounded-lg border border-line">
-            {!residues.length && <div className="p-2 text-[12.5px] text-inkmut">No pocket-residue data for this structure.</div>}
-            {residues.map((r) => {
+            {!residues.length && <div className="p-2 text-[12.5px] text-inkmut">No residue data for this structure.</div>}
+            {!!residues.length && !filteredResidues.length && (
+              <div className="p-2 text-[12.5px] text-inkmut">No residues match "{residueFilter}".</div>
+            )}
+            {filteredResidues.map((r) => {
               const key = residueKey(r);
               return (
                 <label key={key} className="flex cursor-pointer items-center gap-2 border-b border-line/70 px-2.5 py-1.5 text-[12.5px] last:border-0 hover:bg-surface2/60">
                   <input type="checkbox" checked={selected.has(key)} onChange={(e) => toggleResidue(key, e.target.checked)} />
-                  <span className="text-inkmut">
+                  <span className={selected.has(key) ? "font-semibold text-amber" : "text-inkmut"}>
                     {r.resname} {r.resnum} · chain {r.chain}
                   </span>
                 </label>
@@ -327,7 +360,11 @@ export function BindingSiteModal({
           </div>
           {!!residues.length && (
             <div className="field-hint">
-              {selectedCount === residues.length
+              {manual
+                ? selectedCount === 0
+                  ? "No residues selected yet — pick at least one to build a binding box."
+                  : `Binding box set from ${selectedCount} selected residue(s).`
+                : selectedCount === residues.length
                 ? "All pocket residues in use (automatic box)."
                 : selectedCount === 0
                 ? "No residues selected — using the automatic default box."

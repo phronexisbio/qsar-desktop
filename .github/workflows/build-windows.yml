@@ -87,9 +87,9 @@ jobs:
           --collect-all cuik_molmaker
           --collect-all openmm
           --collect-all pdbfixer
-          --hidden-import lightgbm
-          --hidden-import catboost
-          --hidden-import xgboost
+          --collect-all lightgbm
+          --collect-all catboost
+          --collect-all xgboost
           --hidden-import uvicorn
           desktop.py
 
@@ -180,6 +180,23 @@ jobs:
             catch { Start-Sleep -Seconds 2 }
           }
           if (-not $healthOk) { Fail "GET /api/health failed after 5 attempts." }
+
+          # xgboost/lightgbm/catboost's native compute libraries are
+          # runtime-probed (ctypes CDLL, not a normal `import`), invisible
+          # to PyInstaller's static analysis, and WHICH one a below
+          # /api/predict call actually exercises depends on that specific
+          # target's AutoGluon ensemble composition — a shipped bug once
+          # slipped through the single-target predict check below because
+          # that target's ensemble happened not to include an XGBoost
+          # child (see BUILD_WINDOWS.md's "Why --collect-all lightgbm/
+          # catboost/xgboost"). Check all three directly instead of
+          # hoping the right target gets smoke-tested.
+          try {
+            $mlBackends = Invoke-RestMethod "$base/api/health/ml_backends" -TimeoutSec 10
+          } catch { Fail "GET /api/health/ml_backends failed: $_" }
+          foreach ($lib in @("xgboost", "lightgbm", "catboost")) {
+            if (-not $mlBackends.$lib.ok) { Fail "Native library check failed for '$lib': $($mlBackends.$lib.error)" }
+          }
 
           # Download a real, small target from the live bucket — exercises
           # the exact download->extract->load pipeline a real user hits.

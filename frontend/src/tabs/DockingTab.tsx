@@ -8,9 +8,9 @@ import { AdvancedSettingsPanel } from "../components/AdvancedSettingsPanel";
 import { SectionIntro } from "../components/Shell";
 import { EmptyState, ErrorBox, Notice } from "../components/Feedback";
 import { ConfidenceDot } from "../components/Feedback";
-import { DockDetailPanel, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
+import { AlternateLigandButton, DockDetailPanel, EnrichmentChip, FreshDecoyButton, RedockingBanner } from "../components/DockingPieces";
 import { ResidueFrequencyTable } from "../components/ResidueFrequencyTable";
-import type { AdvancedDockingBody, DockResultRow } from "../lib/types";
+import type { AdvancedDockingBody, AlternateLigand, DockResultRow } from "../lib/types";
 
 const DOCK_CONF_COLOR: Record<string, string> = { high: "bg-brand-500", medium: "bg-amber", low: "bg-clay", none: "bg-slateout" };
 
@@ -82,6 +82,7 @@ function DockingReady() {
   const [pdbSource, setPdbSource] = useState<string | null>(null);
   const [completedJobId, setCompletedJobId] = useState<string | null>(null);
   const [reproducing, setReproducing] = useState(false);
+  const [redockingAlt, setRedockingAlt] = useState(false);
 
   /** Shared by a normal submit and A6's "Reproduce this analysis" —
       both just need a job id to poll to completion the same way. */
@@ -126,6 +127,41 @@ function DockingReady() {
       setState("error");
     } finally {
       setReproducing(false);
+    }
+  };
+
+  /** Same PDB structure, a DIFFERENT co-crystallized ligand as the
+      binding-site reference — builds a new receptor centered on it, then
+      resubmits with every other setting (exhaustiveness, poses, GNINA,
+      compound list) held identical to the original run, same contract as
+      reproduce() above. */
+  const redockAlternateLigand = async (lig: AlternateLigand) => {
+    if (!completedJobId) return;
+    setRedockingAlt(true);
+    setError("");
+    try {
+      const build = await api.dockingAlternateLigandBuild(completedJobId, lig);
+      let profile: any = null;
+      while (true) {
+        await api.sleep(1500);
+        const j = await api.pollRetry(() => api.customReceptorJob(build.job_id));
+        if (j.status === "done") {
+          profile = j.profile;
+          break;
+        }
+        if (j.status === "error") throw new Error(j.error || `Could not build a receptor for ${lig.resname} (chain ${lig.chain}).`);
+      }
+      const r = await api.dockingAlternateLigandSubmit(completedJobId, profile);
+      setCaveat(r.caveat || null);
+      setValidated(r.validated ?? null);
+      setReferenceRmsd(r.reference_rmsd ?? null);
+      setPdbSource(r.pdb_source ?? null);
+      await startPolling(r.job_id);
+    } catch (e: any) {
+      setError(e.message || "Error");
+      setState("error");
+    } finally {
+      setRedockingAlt(false);
     }
   };
 
@@ -250,6 +286,8 @@ function DockingReady() {
               jobId={completedJobId}
               onReproduce={reproduce}
               reproducing={reproducing}
+              onRedockAlternateLigand={redockAlternateLigand}
+              redockingAlt={redockingAlt}
             />
           </>
         )}
@@ -270,6 +308,8 @@ function DockResultsTable({
   jobId,
   onReproduce,
   reproducing,
+  onRedockAlternateLigand,
+  redockingAlt,
 }: {
   results: DockResultRow[];
   caveat: string | null;
@@ -282,6 +322,8 @@ function DockResultsTable({
   jobId?: string | null;
   onReproduce?: () => void;
   reproducing?: boolean;
+  onRedockAlternateLigand?: (lig: AlternateLigand) => void;
+  redockingAlt?: boolean;
 }) {
   const [openRows, setOpenRows] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
@@ -368,11 +410,14 @@ function DockResultsTable({
         </table>
       </div>
       {jobId && (
-        <div className="flex items-center justify-end gap-4 border-t border-line px-5 py-2.5">
+        <div className="flex flex-wrap items-center justify-end gap-4 border-t border-line px-5 py-2.5">
           {onReproduce && (
-            <button type="button" className="btn-link" onClick={onReproduce} disabled={reproducing}>
+            <button type="button" className="btn-link" onClick={onReproduce} disabled={reproducing || redockingAlt}>
               {reproducing ? "Reproducing…" : "Reproduce this analysis"}
             </button>
+          )}
+          {onRedockAlternateLigand && (
+            <AlternateLigandButton jobId={jobId} kind="docking" onRedock={onRedockAlternateLigand} busy={redockingAlt || reproducing} />
           )}
           <a className="btn-link" href={api.dockingFailureLogUrl(jobId)} download>
             Download failure log (.csv)

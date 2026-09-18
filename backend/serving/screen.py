@@ -289,6 +289,15 @@ def run(target_id, smiles_list, make_diagram=True, progress=None, advanced=None)
         "dock_validated": dock_validated if dock_ran else None,
         "reference_rmsd": dprofile.get("reference_rmsd") if dock_ran and dprofile else None,
         "pdb_source": dprofile.get("pdb_source") if dock_ran and dprofile else None,
+        # Same 'redock against a different co-crystallized ligand' support
+        # the plain Docking tab's job dict carries — see app.py's
+        # _raw_pdb_path_for_profile().
+        "raw_pdb_path": (
+            (dprofile.get("raw_pdb_path") or
+             (os.path.join(DOCK_PROFILE.DOCKING_TARGETS_DIR, target_id, dprofile["pdb_source"]) if dprofile.get("pdb_source") else None))
+            if dock_ran and dprofile and DOCK_PROFILE else None
+        ),
+        "reference_ligand_resname": dprofile.get("reference_ligand_resname") if dock_ran and dprofile else None,
         # A6 reproducibility metadata — the exact run parameters, not just
         # the prose in methods_note. `engine`/`n_poses` only exist when
         # dock_will_run was True (same scope dock_by_smiles was built in),

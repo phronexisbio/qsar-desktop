@@ -167,6 +167,33 @@ def health():
             "docking": "ready" if dock_ready else "not_ready", "disclaimer": DISCLAIMER}
 
 
+@app.get("/api/health/ml_backends")
+def health_ml_backends():
+    """Whether AutoGluon's base-learner libraries can actually load their
+       native compute engine (xgboost.dll/lib_lightgbm.dll/etc), not just
+       their Python module. `import xgboost` alone triggers xgboost's
+       ctypes CDLL() load of that native library at module-import time
+       (see xgboost/libpath.py's find_lib_path()) — invisible to
+       PyInstaller's static analysis (a plain --hidden-import bundles the
+       .py files but not the runtime-probed .dll), so a frozen build can
+       import fine and /api/health can report OK while every prediction
+       against an XGBoost-based AutoGluon ensemble member crashes.
+       WHICH real target exercises this depends on AutoGluon's per-target
+       model composition (not every target's chosen ensemble includes
+       every base-learner type), so a single smoke-tested /api/predict
+       call can pass while this is still broken — see BUILD_WINDOWS.md's
+       "Why --collect-all lightgbm/catboost/xgboost". CI calls this
+       directly instead of hoping the right target gets tested."""
+    out = {}
+    for lib in ("xgboost", "lightgbm", "catboost"):
+        try:
+            __import__(lib)
+            out[lib] = {"ok": True}
+        except Exception as e:
+            out[lib] = {"ok": False, "error": str(e)}
+    return out
+
+
 @app.get("/api/targets")
 def targets():
     out = []
@@ -606,14 +633,22 @@ def binding_site(target_id: str):
         error = "raw structure or cleaned receptor no longer on disk"
     crystal_sdf = os.path.join(DOCK_PROFILE.DOCKING_TARGETS_DIR, target_id, "crystal_ligand.sdf")
     blind_center = blind_box_size = None
+    all_res = []
     if profile.get("receptor_pdb") and os.path.exists(profile["receptor_pdb"]):
         try:
             blind_center, blind_box_size = RP.box_from_receptor(profile["receptor_pdb"])
         except Exception:
             pass   # blind mode just won't be offered for this target; site-specific evidence above is unaffected
+        try:
+            # The full receptor residue list — for MANUAL site definition,
+            # which must not be limited to the automatically-detected
+            # pocket neighborhood the same way `residues` above is.
+            all_res = RP.all_residues(profile["receptor_pdb"])
+        except Exception:
+            pass   # manual mode just won't have a full list to pick from for this target
     return {"target_id": target_id, "center": profile.get("center"), "box_size": profile.get("box_size"),
            "reference_ligand_resname": resname, "pocket_residues": residues, "n_pocket_residues": len(residues),
-           "has_reference_ligand_mol": os.path.exists(crystal_sdf),
+           "all_residues": all_res, "has_reference_ligand_mol": os.path.exists(crystal_sdf),
            "blind_center": blind_center, "blind_box_size": blind_box_size,
            "error": error if not residues else None}
 
@@ -668,6 +703,81 @@ def box_from_residues(body: BoxFromResiduesBody):
 _CUSTOM_RECEPTOR_JOBS = {}
 
 
+def _build_and_validate_receptor(raw_pdb, work_id, out_dir, target_id, name, ref_resname, chain, resnum=None, progress=None):
+    """Shared core of 'build a receptor centered on ONE specific ligand,
+       then redocking-validate it': used by docking_receptor_custom below
+       (which fetches raw_pdb from RCSB first) and by
+       docking_alternate_ligand_build (which already has raw_pdb sitting
+       on disk from the ORIGINAL job, no fetch needed — see that
+       endpoint's docstring). Runs the same RMSD<2A gate
+       scripts/validate_target.py uses; never touches docking_registry.json
+       — this is always a per-request profile, not a promotion to the
+       registry default (see docking_receptor_custom's own docstring for
+       why that matters)."""
+    import time
+    from docking import receptor_prep as RP
+
+    def _step(label):
+        if progress:
+            progress(label)
+
+    t_build0 = time.time()
+    profile = RP.build_receptor(raw_pdb, work_id, name=name, ref_resname=ref_resname, chain=chain, resnum=resnum,
+                                out_dir=out_dir, progress=progress)
+    profile["target_id"] = target_id   # advertise the REAL target_id to the caller, not the scratch work_id
+    # Original, unmodified structure — lets the UI show a before/after
+    # comparison against the stripped/repaired receptor_pdb.
+    profile["raw_pdb_path"] = os.path.abspath(raw_pdb)
+    build_seconds = round(time.time() - t_build0, 1)
+
+    # Real per-phase timing for the two steps below (network fetch vs the
+    # actual Vina redock) — previously reported as ONE opaque "Redocking…"
+    # message with no visibility into which part is slow. This is what
+    # made "why did structure prep take 90s instead of 20-40s" impossible
+    # to diagnose without guessing: strip/repair/PDBQT is consistently
+    # 4-8s regardless of target (measured across several real structures),
+    # so any large total has to come from here — a slow/degraded RCSB
+    # connection (fetch_ligand_smiles has NO retry, up to 20s timeout) or
+    # a genuinely slow Vina search (bigger box/protein), and previously
+    # there was no record of which. Recorded on the profile so it survives
+    # into prep_report/the export package, not just a transient log line.
+    timing = {"build_seconds": build_seconds}
+    if ref_resname:
+        try:
+            t0 = time.time()
+            _step("Fetching reference ligand's SMILES from RCSB")
+            from scripts.validate_target import fetch_ligand_smiles, make_crystal_sdf
+            lig_smiles = fetch_ligand_smiles(ref_resname)
+            crystal_sdf = make_crystal_sdf(raw_pdb, ref_resname,
+                                           os.path.join(out_dir, work_id, "crystal_ligand.sdf"),
+                                           lig_smiles, chain=chain)
+            timing["fetch_ligand_smiles_seconds"] = round(time.time() - t0, 1)
+
+            t1 = time.time()
+            _step("Redocking the known reference ligand with Vina (validation — can take 10-60s+)")
+            redock = DOCK_PIPE.redock_reference(profile, lig_smiles, crystal_sdf=crystal_sdf, rmsd_threshold=2.0)
+            timing["vina_redock_seconds"] = round(time.time() - t1, 1)
+
+            profile["validated"] = bool(redock.get("validated"))
+            profile["reference_rmsd"] = redock.get("reference_rmsd")
+            # Both poses, for an overlay view — not just the RMSD number.
+            # crystal_ligand_path is served the same way raw_pdb_path/
+            # receptor_pdb already are (receptor_file).
+            profile["redocked_pose_pdb"] = redock.get("redocked_pose_pdb")
+            profile["crystal_ligand_path"] = os.path.abspath(crystal_sdf) if os.path.exists(crystal_sdf) else None
+            if not redock.get("validated"):
+                profile["redock_note"] = (
+                    f"redocking RMSD {redock['reference_rmsd']} Å exceeds the 2 Å threshold"
+                    if redock.get("reference_rmsd") is not None
+                    else f"redocking check inconclusive ({redock.get('rmsd_error') or redock.get('status') or 'no valid pose'})")
+        except Exception as e:
+            profile["redock_note"] = f"redocking check errored: {e}"
+    else:
+        profile["redock_note"] = "no ligand resname given — redocking check skipped"
+    profile["timing"] = timing
+    return profile
+
+
 class CustomReceptorBody(BaseModel):
     target_id: str
     pdb_id: str
@@ -692,10 +802,8 @@ def docking_receptor_custom(body: CustomReceptorBody):
     import threading, uuid
     if DOCK_PROFILE is None:
         raise HTTPException(503, "Docking package not available")
-    from docking import receptor_prep as RP
     from scripts.pdb_fetch import fetch_pdb
     from scripts.detect_chain import chain_for_ligand
-    from scripts.batch_validate import gene_for_target
 
     jid = uuid.uuid4().hex[:12]
     _CUSTOM_RECEPTOR_JOBS[jid] = {"status": "queued", "step": "Queued", "profile": None, "error": None}
@@ -706,51 +814,32 @@ def docking_receptor_custom(body: CustomReceptorBody):
         def _step(label):
             job["step"] = label
         try:
+            import time
             out_dir = os.path.join("docking_targets", "_custom")
             work_id = f"{body.target_id}__{body.pdb_id}"
             os.makedirs(os.path.join(out_dir, work_id), exist_ok=True)
             raw_pdb = os.path.join(out_dir, work_id, f"{body.pdb_id}_raw.pdb")
             _step(f"Fetching {body.pdb_id} from RCSB")
+            t0 = time.time()
             fetch_pdb(body.pdb_id, raw_pdb)
+            fetch_seconds = round(time.time() - t0, 1)
             chain = body.chain
             if not chain and body.ligand_resname:
                 _step("Locating chain containing the reference ligand")
                 chain = chain_for_ligand(raw_pdb, body.ligand_resname)
                 if chain is None:
                     raise RuntimeError(f"ligand '{body.ligand_resname}' not found in any chain of {body.pdb_id}")
-            profile = RP.build_receptor(raw_pdb, work_id, name=f"{body.target_id} ({body.pdb_id}, manual)",
-                                        ref_resname=body.ligand_resname, chain=chain, out_dir=out_dir, progress=_step)
-            profile["target_id"] = body.target_id   # advertise the REAL target_id to the caller, not the scratch work_id
-            # Original, unmodified structure — lets the UI show a before/
-            # after comparison against the stripped/repaired receptor_pdb.
-            profile["raw_pdb_path"] = os.path.abspath(raw_pdb)
-
-            if body.ligand_resname:
-                try:
-                    _step("Redocking the known reference ligand (validation)")
-                    from scripts.validate_target import fetch_ligand_smiles, make_crystal_sdf
-                    lig_smiles = fetch_ligand_smiles(body.ligand_resname)
-                    crystal_sdf = make_crystal_sdf(raw_pdb, body.ligand_resname,
-                                                   os.path.join(out_dir, work_id, "crystal_ligand.sdf"),
-                                                   lig_smiles, chain=chain)
-                    redock = DOCK_PIPE.redock_reference(profile, lig_smiles, crystal_sdf=crystal_sdf, rmsd_threshold=2.0)
-                    profile["validated"] = bool(redock.get("validated"))
-                    profile["reference_rmsd"] = redock.get("reference_rmsd")
-                    # Both poses, for an overlay view — not just the RMSD
-                    # number. crystal_ligand_path is served the same way
-                    # raw_pdb_path/receptor_pdb already are (receptor_file).
-                    profile["redocked_pose_pdb"] = redock.get("redocked_pose_pdb")
-                    profile["crystal_ligand_path"] = os.path.abspath(crystal_sdf) if os.path.exists(crystal_sdf) else None
-                    if not redock.get("validated"):
-                        profile["redock_note"] = (
-                            f"redocking RMSD {redock['reference_rmsd']} Å exceeds the 2 Å threshold"
-                            if redock.get("reference_rmsd") is not None
-                            else f"redocking check inconclusive ({redock.get('rmsd_error') or redock.get('status') or 'no valid pose'})")
-                except Exception as e:
-                    profile["redock_note"] = f"redocking check errored: {e}"
-            else:
-                profile["redock_note"] = "no ligand resname given — redocking check skipped"
-
+            profile = _build_and_validate_receptor(raw_pdb, work_id, out_dir, body.target_id,
+                                                    f"{body.target_id} ({body.pdb_id}, manual)",
+                                                    body.ligand_resname, chain, progress=_step)
+            # fetch_pdb has no retry and a per-request 30s timeout; a slow/
+            # degraded RCSB connection (or an mmCIF-only entry needing the
+            # fetch-.pdb-404-then-fetch-.cif fallback) can silently cost
+            # real seconds here with no other visibility — recorded
+            # alongside build_receptor's own per-phase timing (see
+            # _build_and_validate_receptor) so a slow run is diagnosable
+            # with real numbers instead of one opaque "Preparing…" message.
+            profile.setdefault("timing", {})["fetch_pdb_seconds"] = fetch_seconds
             job["step"] = "Done"
             job["profile"] = profile
             job["status"] = "done"
@@ -862,6 +951,24 @@ class DockBody(BaseModel):
     plant_source: Optional[str] = None
 
 
+def _raw_pdb_path_for_profile(target_id, profile):
+    """Path to the RAW (un-stripped, still has every co-crystallized
+       ligand) structure a profile was built from — needed for 'redock
+       against a different ligand in the same structure' (see
+       docking_alternate_ligands/docking_redock_alternate below), since
+       receptor_pdb (the cleaned one) has had every heteroatom removed.
+       A manually-picked Advanced Settings structure carries its own
+       raw_pdb_path (see docking_receptor_custom); a registry-default
+       target's raw file always lives at DOCKING_TARGETS_DIR/<target_id>/
+       <pdb_source> (see scripts/validate_target.py, which fetches it
+       there before receptor_prep.build_receptor ever runs)."""
+    if profile.get("raw_pdb_path"):
+        return profile["raw_pdb_path"]
+    if profile.get("pdb_source"):
+        return os.path.join(DOCK_PROFILE.DOCKING_TARGETS_DIR, target_id, profile["pdb_source"])
+    return None
+
+
 def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles, plant_source=None):
     """A6 — reproducibility snapshot for one docking/screen run: everything
        needed to redo it later (or write a Methods section from it) that
@@ -880,6 +987,8 @@ def _build_run_metadata(target_id, profile, engine, rescorer, n_poses, smiles, p
         "box_center": profile.get("center"),
         "box_size": profile.get("box_size"),
         "pdb_source": profile.get("pdb_source"),
+        "raw_pdb_path": _raw_pdb_path_for_profile(target_id, profile),
+        "reference_ligand_resname": profile.get("reference_ligand_resname"),
         "receptor_validated": bool(profile.get("validated")),
         "reference_rmsd": profile.get("reference_rmsd"),
         "engine": getattr(engine, "name", None),
@@ -976,6 +1085,133 @@ def docking_reproduce(jid: str):
         use_gnina=(False if rm.get("rescorer") == "NullRescorer" else None),
         docking_mode=rm.get("docking_mode"),
         custom_profile=custom_profile,
+    )
+    return _submit_docking(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
+
+
+def _alternate_ligands_response(raw_pdb_path, reference_ligand_resname, box_center):
+    """Shared by docking_alternate_ligands/screen_alternate_ligands — the
+       SAME raw PDB structure a job docked against often has more than one
+       real co-crystallized ligand (different binding sites, or one copy
+       per chain in a crystallographic dimer); the pipeline always
+       silently picks just the single largest one as THE reference. This
+       lists every real alternative (see docking/receptor_prep.py's
+       list_ligands()) so the UI can offer 'dock again centered on a
+       different one, same settings otherwise' beside 'Reproduce this
+       analysis'."""
+    if not raw_pdb_path or not os.path.exists(raw_pdb_path):
+        return {"available": False, "note": "The raw structure this job used is no longer on disk.", "current": None, "ligands": []}
+    from docking import receptor_prep as RP
+    try:
+        ligands = RP.list_ligands(raw_pdb_path)
+    except Exception as e:
+        return {"available": False, "note": f"Could not read ligands from the raw structure: {e}", "current": None, "ligands": []}
+    current = None
+    if reference_ligand_resname:
+        same_name = [l for l in ligands if l["resname"] == reference_ligand_resname]
+        if len(same_name) > 1 and box_center:
+            bc = box_center
+            current = min(same_name, key=lambda l: sum((a - b) ** 2 for a, b in zip(l["center"], bc)))
+        elif same_name:
+            current = same_name[0]
+    return {"available": True, "current": current, "ligands": ligands}
+
+
+@app.get("/api/docking/job/{jid}/alternate_ligands")
+def docking_alternate_ligands(jid: str):
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    return _alternate_ligands_response(rm.get("raw_pdb_path"), rm.get("reference_ligand_resname"), rm.get("box_center"))
+
+
+class AlternateLigandBody(BaseModel):
+    resname: str
+    chain: str
+    resnum: int
+
+
+@app.post("/api/docking/job/{jid}/alternate_ligand/build")
+def docking_alternate_ligand_build(jid: str, body: AlternateLigandBody):
+    """Step 1 of 'dock again against a different co-crystallized ligand in
+       the same PDB structure' (the button beside 'Reproduce this
+       analysis'): rebuilds a receptor centered on body's ligand INSTEAD
+       of whichever one the original run used — reusing the SAME raw
+       structure file already on disk (no re-fetch, unlike
+       docking_receptor_custom's from-scratch flow, since this job's
+       run_metadata already has it) and running the same redocking-
+       validation check. Async job reusing _CUSTOM_RECEPTOR_JOBS — poll
+       via the EXISTING /api/docking/receptor/custom/job/{jid}, so no new
+       polling endpoint/frontend code is needed. Step 2
+       (docking_alternate_ligand_submit) resubmits docking, with every
+       OTHER setting pinned to the original run, once this profile is
+       ready."""
+    import threading, uuid
+    if DOCK_PROFILE is None:
+        raise HTTPException(503, "Docking package not available")
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id")
+    raw_pdb_path = rm.get("raw_pdb_path")
+    if not target_id or not raw_pdb_path or not os.path.exists(raw_pdb_path):
+        raise HTTPException(409, "the raw structure this job used is no longer on disk")
+
+    bjid = uuid.uuid4().hex[:12]
+    _CUSTOM_RECEPTOR_JOBS[bjid] = {"status": "queued", "step": "Queued", "profile": None, "error": None}
+
+    def work():
+        j = _CUSTOM_RECEPTOR_JOBS[bjid]
+        j["status"] = "running"
+        def _step(label):
+            j["step"] = label
+        try:
+            out_dir = os.path.join("docking_targets", "_custom")
+            work_id = f"{target_id}__altlig_{uuid.uuid4().hex[:8]}"
+            os.makedirs(os.path.join(out_dir, work_id), exist_ok=True)
+            profile = _build_and_validate_receptor(raw_pdb_path, work_id, out_dir, target_id,
+                                                    f"{target_id} (alternate ligand {body.resname})",
+                                                    body.resname, body.chain, resnum=body.resnum, progress=_step)
+            j["step"] = "Done"
+            j["profile"] = profile
+            j["status"] = "done"
+        except Exception as e:
+            j["status"] = "error"; j["error"] = str(e)
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": bjid}
+
+
+class AlternateLigandSubmitBody(BaseModel):
+    profile: dict   # a ReceptorProfile from docking_alternate_ligand_build's job result
+
+
+@app.post("/api/docking/job/{jid}/alternate_ligand/submit")
+def docking_alternate_ligand_submit(jid: str, body: AlternateLigandSubmitBody):
+    """Step 2: resubmits docking with the newly-built alternate-ligand
+       profile as custom_profile, but every OTHER setting (exhaustiveness,
+       poses, GNINA, docking mode, compound list, plant source) pinned to
+       the ORIGINAL job — same 'keep settings identical' contract as
+       docking_reproduce, just with a substituted receptor/box instead of
+       the same one."""
+    job = _DOCK_JOBS.get(jid)
+    if not job or job["status"] not in ("done", "cancelled"):
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id")
+    if not target_id:
+        raise HTTPException(409, "this job has no reproducibility metadata to reproduce from")
+    smiles = [r.get("smiles") for r in (job.get("results") or []) if r.get("smiles")]
+    if not smiles:
+        raise HTTPException(409, "no compound list recorded for this job")
+
+    advanced = AdvancedDocking(
+        exhaustiveness=rm.get("exhaustiveness"),
+        n_poses=rm.get("n_poses"),
+        use_gnina=(False if rm.get("rescorer") == "NullRescorer" else None),
+        docking_mode=rm.get("docking_mode"),
+        custom_profile=body.profile,
     )
     return _submit_docking(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
 
@@ -1270,6 +1506,85 @@ def screen_reproduce(jid: str):
     return _submit_screen(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
 
 
+@app.get("/api/screen/job/{jid}/alternate_ligands")
+def screen_alternate_ligands(jid: str):
+    """Same as docking_alternate_ligands, adapted for the Screen
+       pipeline's job/run_metadata shape."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    return _alternate_ligands_response(rm.get("raw_pdb_path"), rm.get("reference_ligand_resname"), rm.get("box_center"))
+
+
+@app.post("/api/screen/job/{jid}/alternate_ligand/build")
+def screen_alternate_ligand_build(jid: str, body: AlternateLigandBody):
+    """Same as docking_alternate_ligand_build, adapted for the Screen
+       pipeline's job/run_metadata shape. Still reuses
+       _CUSTOM_RECEPTOR_JOBS/its existing poll endpoint — the build step
+       itself doesn't care which tab originally ran the job."""
+    import threading, uuid
+    if DOCK_PROFILE is None:
+        raise HTTPException(503, "Docking package not available")
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id") or (job.get("result") or {}).get("target_id")
+    raw_pdb_path = rm.get("raw_pdb_path")
+    if not target_id or not raw_pdb_path or not os.path.exists(raw_pdb_path):
+        raise HTTPException(409, "the raw structure this job used is no longer on disk")
+
+    bjid = uuid.uuid4().hex[:12]
+    _CUSTOM_RECEPTOR_JOBS[bjid] = {"status": "queued", "step": "Queued", "profile": None, "error": None}
+
+    def work():
+        j = _CUSTOM_RECEPTOR_JOBS[bjid]
+        j["status"] = "running"
+        def _step(label):
+            j["step"] = label
+        try:
+            out_dir = os.path.join("docking_targets", "_custom")
+            work_id = f"{target_id}__altlig_{uuid.uuid4().hex[:8]}"
+            os.makedirs(os.path.join(out_dir, work_id), exist_ok=True)
+            profile = _build_and_validate_receptor(raw_pdb_path, work_id, out_dir, target_id,
+                                                    f"{target_id} (alternate ligand {body.resname})",
+                                                    body.resname, body.chain, resnum=body.resnum, progress=_step)
+            j["step"] = "Done"
+            j["profile"] = profile
+            j["status"] = "done"
+        except Exception as e:
+            j["status"] = "error"; j["error"] = str(e)
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": bjid}
+
+
+@app.post("/api/screen/job/{jid}/alternate_ligand/submit")
+def screen_alternate_ligand_submit(jid: str, body: AlternateLigandSubmitBody):
+    """Step 2 for the Screen tab: resubmits with the newly-built alternate-
+       ligand profile as custom_profile, every other setting pinned to the
+       original run — same contract as screen_reproduce."""
+    job = _SCREEN_JOBS.get(jid)
+    if not job or job["status"] != "done":
+        raise HTTPException(404, "job not found or not finished")
+    result = job.get("result") or {}
+    rm = job.get("run_metadata") or {}
+    target_id = rm.get("target_id") or result.get("target_id")
+    if not target_id:
+        raise HTTPException(409, "this job has no reproducibility metadata to reproduce from")
+    smiles = [r.get("input_smiles") or r.get("smiles") for r in (result.get("shortlist") or []) if r.get("smiles")]
+    if not smiles:
+        raise HTTPException(409, "no compound list recorded for this job")
+
+    advanced = AdvancedDocking(
+        exhaustiveness=rm.get("exhaustiveness"),
+        n_poses=rm.get("n_poses"),
+        docking_mode=rm.get("docking_mode"),
+        custom_profile=body.profile,
+    )
+    return _submit_screen(target_id, smiles, advanced, plant_source=rm.get("plant_source"))
+
+
 def _run_screen_job(jid, target_id, smiles, advanced=None, plant_source=None):
     import threading
 
@@ -1296,6 +1611,8 @@ def _run_screen_job(jid, target_id, smiles, advanced=None, plant_source=None):
                 "box_center": result.get("box_center"),
                 "box_size": result.get("box_size"),
                 "pdb_source": result.get("pdb_source"),
+                "raw_pdb_path": result.get("raw_pdb_path"),
+                "reference_ligand_resname": result.get("reference_ligand_resname"),
                 "receptor_validated": bool(result.get("dock_validated")),
                 "reference_rmsd": result.get("reference_rmsd"),
                 "exhaustiveness": result.get("exhaustiveness"),

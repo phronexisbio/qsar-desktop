@@ -25,6 +25,20 @@ function downloadPrepReport(profile: ReceptorProfile) {
   URL.revokeObjectURL(url);
 }
 
+/** Real per-phase wall time for this structure-prep run — makes a slow
+    run (network fetch vs. Vina redock vs. the offline build itself)
+    diagnosable at a glance instead of one opaque timed-but-unbroken-down
+    wait. See backend/app.py's _build_and_validate_receptor. */
+function formatTiming(t: NonNullable<ReceptorProfile["timing"]>): string {
+  const parts: string[] = [];
+  if (t.fetch_pdb_seconds != null) parts.push(`fetch structure ${t.fetch_pdb_seconds}s`);
+  if (t.build_seconds != null) parts.push(`strip/repair/PDBQT ${t.build_seconds}s`);
+  if (t.fetch_ligand_smiles_seconds != null) parts.push(`fetch ligand SMILES ${t.fetch_ligand_smiles_seconds}s`);
+  if (t.vina_redock_seconds != null) parts.push(`Vina redock ${t.vina_redock_seconds}s`);
+  const total = Object.values(t).reduce((a, b) => a + (b || 0), 0);
+  return `${parts.join(" · ")} (total ${total.toFixed(1)}s)`;
+}
+
 const STATUS_CLS: Record<string, string> = {
   muted: "text-inkmut",
   ok: "border-brand-300/50 bg-brand-500/[0.08] text-brand-800 rounded-lg border px-2.5 py-2",
@@ -132,6 +146,11 @@ export function AdvancedSettingsPanel({
               <button type="button" className="btn-link mt-1.5" onClick={() => downloadPrepReport(adv.customProfile!)}>
                 Download prep report
               </button>
+            )}
+            {!!adv.customProfile?.timing && (
+              <div className="field-hint mt-1">
+                Timing: {formatTiming(adv.customProfile.timing)}
+              </div>
             )}
             {adv.customProfile?.redocked_pose_pdb && adv.customProfile?.crystal_ligand_path && (
               <>

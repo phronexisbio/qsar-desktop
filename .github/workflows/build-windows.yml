@@ -89,7 +89,8 @@ jobs:
           --collect-all pdbfixer
           --collect-all lightgbm
           --collect-all catboost
-          --collect-all xgboost
+          --collect-data xgboost
+          --hidden-import xgboost
           --hidden-import uvicorn
           desktop.py
 

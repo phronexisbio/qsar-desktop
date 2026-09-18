@@ -115,7 +115,8 @@ From the project root:
       --collect-all pdbfixer ^
       --collect-all lightgbm ^
       --collect-all catboost ^
-      --collect-all xgboost ^
+      --collect-data xgboost ^
+      --hidden-import xgboost ^
       --hidden-import uvicorn ^
       desktop.py
 The .exe lands in `dist\PhytoScreen\PhytoScreen.exe` (onedir — not
@@ -231,7 +232,7 @@ download-on-demand system — `desktop.py` points `CURATED_DATA_DIR` at
 `FROZEN_ROOT` when frozen, same pattern as `DOCKING_REGISTRY`/
 `PANEL_RESULTS_CSV`.
 
-### Why `--collect-all lightgbm/catboost/xgboost`, not `--hidden-import`
+### Why `--collect-all lightgbm/catboost`, `--collect-data xgboost --hidden-import xgboost`
 AutoGluon's stacked ensembles are built from these base learners — the
 chosen model for several real targets in this repo is `LightGBMXT_BAG_L1`
 or a `CatBoost_BAG_*` child. AutoGluon `pickle.load()`s them lazily at
@@ -260,14 +261,39 @@ XGBoost-based ensemble member, as `XGBoostLibraryNotFound: Cannot find
 XGBoost Library in the candidate path` listing paths under
 `_internal\xgboost\lib\xgboost.dll` that were never copied in. LightGBM
 ships the identical architecture (`lib_lightgbm.dll`, loaded the same
-ctypes way) so it gets the same fix pre-emptively rather than waiting
-for it to surface as the next per-target screening crash; CatBoost's
-native code is a normal importable extension module (PyInstaller's
-binary-dependency analysis already follows real `import` statements), so
-`--hidden-import` likely already worked for it, but `--collect-all` is a
-strict superset — switching it too costs nothing and keeps all three
-base learners handled the same way instead of two different mechanisms
-for what's conceptually one family of problem.
+ctypes way); CatBoost's native code is a normal importable extension
+module (PyInstaller's binary-dependency analysis already follows real
+`import` statements), so `--hidden-import` likely already worked for it.
+
+The obvious fix — `--collect-all` for all three, a strict superset of
+`--hidden-import` — broke the build outright for `xgboost` specifically
+(a real CI failure, not a hypothetical): `--collect-all` does
+`collect_submodules()`, which **imports every submodule under the
+package** to discover its own dependencies, including
+`xgboost/testing/__init__.py` — a test-support module (never imported by
+real usage) that unconditionally runs `pytest.importorskip("hypothesis")`
+at import time. `hypothesis` isn't installed in this CI image, so that
+raises pytest's `Skipped` exception — which, unlike a plain
+`ModuleNotFoundError` (see the `rdkit.sping.WX`/`lightning.data`/
+`webview.platforms.android`/`admet_ai.web`/`catboost.widget` *warnings*
+in a normal build log — those all fail the same "optional submodule
+missing" way and are caught fine), PyInstaller's collector does **not**
+treat as recoverable, and the whole PyInstaller invocation dies:
+`RuntimeError: Child process call to _collect_submodules() failed with:
+... Skipped: could not import 'hypothesis'`. `lightgbm` and `catboost`
+have no such test-time-import in their real package `__init__.py`, so
+`--collect-all` is fine for them — confirmed by the same CI run, where
+both completed cleanly and only `xgboost`'s crashed.
+
+The fix that avoids the crash while still bundling the actual `.dll`:
+`--collect-data xgboost` (walks the package tree for non-`.py` files —
+grabs `xgboost/lib/xgboost.dll` — without `collect_submodules()`'s
+recursive import-everything scan) plus `--hidden-import xgboost` (forces
+the top-level package onto the bundle graph; its own `__init__.py`
+already does `from . import core, sklearn, ...`, so PyInstaller's normal
+per-file import-graph walk picks up everything real usage actually needs
+from there — `testing/` is never imported by that chain, so it's never
+touched).
 
 Notes / likely tweaks (validate on your machine):
 - PyInstaller sometimes needs extra `--collect-all`/`--hidden-import`
